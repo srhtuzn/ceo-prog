@@ -14,6 +14,11 @@ import {
   Typography,
   Popconfirm,
   Tooltip,
+  Form,
+  Input,
+  Row,
+  Col,
+  Badge,
 } from "antd";
 import {
   UserOutlined,
@@ -21,13 +26,16 @@ import {
   ApartmentOutlined,
   UnorderedListOutlined,
   UserDeleteOutlined,
+  TeamOutlined,
+  IdcardOutlined,
+  DeleteOutlined, // <-- EKSİK OLAN İKON EKLENDİ
 } from "@ant-design/icons";
 
 const { Text } = Typography;
 const { Option } = Select;
 const API_URL = "http://localhost:3000";
 
-// Yetkili Roller (Bunlar dışındakiler düzenleme yapamaz)
+// Yetkili Roller
 const YETKILI_ROLLER = [
   "Genel Müdür",
   "İnsan Kaynakları",
@@ -37,12 +45,15 @@ const YETKILI_ROLLER = [
 
 export default function EkipYonetimi({ aktifKullanici }) {
   const [kullanicilar, setKullanicilar] = useState([]);
-  const [modalAcik, setModalAcik] = useState(false);
+  const [yoneticiModalAcik, setYoneticiModalAcik] = useState(false);
+  const [duzenleModalAcik, setDuzenleModalAcik] = useState(false);
   const [seciliPersonel, setSeciliPersonel] = useState(null);
   const [yeniYonetici, setYeniYonetici] = useState(null);
   const [yukleniyor, setYukleniyor] = useState(false);
 
-  // Güvenlik: Kullanıcı yetkili mi?
+  const [form] = Form.useForm();
+
+  // Güvenlik: Sadece belirli roller düzenleme yapabilir
   const yetkiliMi =
     YETKILI_ROLLER.includes(aktifKullanici?.rol) ||
     aktifKullanici?.departman === "Yönetim";
@@ -57,12 +68,11 @@ export default function EkipYonetimi({ aktifKullanici }) {
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) setKullanicilar(data);
-        else setKullanicilar([]);
         setYukleniyor(false);
       });
   };
 
-  // Yönetici Atama
+  // --- İŞLEMLER ---
   const yoneticiKaydet = () => {
     fetch(`${API_URL}/kullanicilar/yonetici-ata/${seciliPersonel.id}`, {
       method: "PUT",
@@ -72,7 +82,7 @@ export default function EkipYonetimi({ aktifKullanici }) {
       const data = await res.json();
       if (res.ok) {
         message.success("Yönetici atandı");
-        setModalAcik(false);
+        setYoneticiModalAcik(false);
         veriCek();
       } else {
         message.error(data.error || "Hata oluştu");
@@ -80,20 +90,46 @@ export default function EkipYonetimi({ aktifKullanici }) {
     });
   };
 
-  // Yönetici Silme (Bağlantı Kesme)
   const yoneticiSil = (personelId) => {
     fetch(`${API_URL}/kullanicilar/yonetici-sil/${personelId}`, {
       method: "PUT",
     }).then(() => {
-      message.success("Yönetici bağlantısı kaldırıldı");
+      message.success("Bağlantı kaldırıldı");
       veriCek();
     });
   };
 
-  const modalAc = (personel) => {
+  const kullaniciSil = (id) => {
+    fetch(`${API_URL}/kullanicilar/${id}`, { method: "DELETE" }).then(() => {
+      message.success("Personel silindi");
+      veriCek();
+    });
+  };
+
+  const kullaniciGuncelle = (values) => {
+    fetch(`${API_URL}/kullanicilar/${seciliPersonel.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    }).then(() => {
+      message.success("Bilgiler güncellendi");
+      setDuzenleModalAcik(false);
+      veriCek();
+    });
+  };
+
+  // --- MODAL AÇICILAR ---
+  const yoneticiModalAc = (personel) => {
     setSeciliPersonel(personel);
     setYeniYonetici(personel.yonetici_id);
-    setModalAcik(true);
+    setYoneticiModalAcik(true);
+  };
+
+  const duzenleModalAc = (personel) => {
+    setSeciliPersonel(personel);
+    setDuzenleModalAcik(true);
+    // Formu bu kişinin bilgileriyle doldur
+    setTimeout(() => form.setFieldsValue(personel), 100);
   };
 
   // --- TABLO KOLONLARI ---
@@ -114,7 +150,7 @@ export default function EkipYonetimi({ aktifKullanici }) {
               {text}
             </Text>
             <Text type="secondary" style={{ fontSize: 11 }}>
-              {r.rol}
+              {r.email}
             </Text>
           </div>
         </Space>
@@ -125,20 +161,51 @@ export default function EkipYonetimi({ aktifKullanici }) {
       dataIndex: "departman",
       render: (d) => <Tag>{d}</Tag>,
     },
+    { title: "Pozisyon", dataIndex: "pozisyon" },
+    {
+      title: "Rol",
+      dataIndex: "rol",
+      render: (r) => (
+        <Tag
+          color={
+            r === "Genel Müdür" ? "purple" : r === "Personel" ? "blue" : "cyan"
+          }
+        >
+          {r}
+        </Tag>
+      ),
+    },
+    {
+      title: "Durum",
+      dataIndex: "hesap_durumu",
+      render: (d) => (
+        <Badge status={d === "Aktif" ? "success" : "error"} text={d} />
+      ),
+    },
     {
       title: "Yöneticisi",
       dataIndex: "yonetici_adi",
-      render: (y) =>
-        y ? <Tag color="purple">{y}</Tag> : <Text type="secondary">-</Text>,
+      render: (y, r) => (
+        <Space>
+          {y ? <Tag color="purple">{y}</Tag> : <Text type="secondary">-</Text>}
+          {yetkiliMi && (
+            <Tooltip title="Yönetici Değiştir">
+              <Button
+                size="small"
+                type="text"
+                icon={<TeamOutlined />}
+                onClick={() => yoneticiModalAc(r)}
+              />
+            </Tooltip>
+          )}
+        </Space>
+      ),
     },
     {
       title: "İşlem",
       render: (_, r) => {
-        // EĞER YETKİLİ DEĞİLSE BUTON GÖSTERME
         if (!yetkiliMi)
           return <span style={{ color: "#ccc", fontSize: 11 }}>Yetkisiz</span>;
-
-        // Kendi yöneticisini değiştiremesin (Opsiyonel güvenlik)
         if (r.id === aktifKullanici.id)
           return (
             <span style={{ color: "#ccc", fontSize: 11 }}>Kendi kaydınız</span>
@@ -146,33 +213,40 @@ export default function EkipYonetimi({ aktifKullanici }) {
 
         return (
           <Space>
-            <Tooltip title="Yönetici Ata / Değiştir">
+            <Tooltip title="Düzenle">
               <Button
                 size="small"
                 type="primary"
                 ghost
                 icon={<EditOutlined />}
-                onClick={() => modalAc(r)}
+                onClick={() => duzenleModalAc(r)}
               />
             </Tooltip>
-
             {r.yonetici_id && (
               <Tooltip title="Yöneticiyi Kaldır">
                 <Popconfirm
                   title="Bağlantıyı kes?"
                   onConfirm={() => yoneticiSil(r.id)}
                 >
-                  <Button size="small" danger icon={<UserDeleteOutlined />} />
+                  <Button size="small" icon={<UserDeleteOutlined />} />
                 </Popconfirm>
               </Tooltip>
             )}
+            <Tooltip title="Personeli Sil">
+              <Popconfirm
+                title="Kullanıcıyı silmek istiyor musunuz?"
+                description="Bu işlem geri alınamaz!"
+                onConfirm={() => kullaniciSil(r.id)}
+              >
+                <Button size="small" danger icon={<DeleteOutlined />} />
+              </Popconfirm>
+            </Tooltip>
           </Space>
         );
       },
     },
   ];
 
-  // --- AĞAÇ VERİSİNİ OLUŞTURMA MOTORU ---
   const agacOlustur = (items, parentId = null) => {
     return items
       .filter((item) => item.yonetici_id === parentId)
@@ -195,9 +269,6 @@ export default function EkipYonetimi({ aktifKullanici }) {
         children: agacOlustur(items, item.id),
       }));
   };
-
-  // Kök düğümleri bul (Yöneticisi olmayanlar en tepedir)
-  // Not: Genel Müdürün yöneticisi NULL olmalıdır.
   const treeData = agacOlustur(kullanicilar);
 
   return (
@@ -252,11 +323,11 @@ export default function EkipYonetimi({ aktifKullanici }) {
         />
       </Card>
 
-      {/* YÖNETİCİ ATAMA PENCERESİ */}
+      {/* --- YÖNETİCİ ATAMA PENCERESİ --- */}
       <Modal
         title="Yönetici Ata"
-        open={modalAcik}
-        onCancel={() => setModalAcik(false)}
+        open={yoneticiModalAcik}
+        onCancel={() => setYoneticiModalAcik(false)}
         onOk={yoneticiKaydet}
       >
         <p>
@@ -280,6 +351,83 @@ export default function EkipYonetimi({ aktifKullanici }) {
               </Option>
             ))}
         </Select>
+      </Modal>
+
+      {/* --- PERSONEL DÜZENLEME PENCERESİ (YENİ) --- */}
+      <Modal
+        title="Personel Bilgilerini Düzenle"
+        open={duzenleModalAcik}
+        onCancel={() => setDuzenleModalAcik(false)}
+        footer={null}
+      >
+        <Form form={form} layout="vertical" onFinish={kullaniciGuncelle}>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item
+                name="ad_soyad"
+                label="Ad Soyad"
+                rules={[{ required: true }]}
+              >
+                <Input prefix={<UserOutlined />} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="email"
+                label="E-Posta"
+                rules={[{ required: true, type: "email" }]}
+              >
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="departman" label="Departman">
+                <Select>
+                  <Option value="Bilgi İşlem">Bilgi İşlem</Option>
+                  <Option value="Muhasebe">Muhasebe</Option>
+                  <Option value="Satış">Satış</Option>
+                  <Option value="Yönetim">Yönetim</Option>
+                  <Option value="İK">İnsan Kaynakları</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="pozisyon" label="Pozisyon">
+                <Input />
+              </Form.Item>
+            </Col>
+
+            {/* YÖNETİCİLERE ÖZEL ALANLAR */}
+            <Col span={12}>
+              <Form.Item name="rol" label="Sistem Rolü">
+                <Select>
+                  <Option value="Personel">Personel</Option>
+                  <Option value="Süpervizör">Süpervizör</Option>
+                  <Option value="Departman Müdürü">Departman Müdürü</Option>
+                  <Option value="Genel Müdür">Genel Müdür</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="hesap_durumu" label="Hesap Durumu">
+                <Select>
+                  <Option value="Aktif">Aktif</Option>
+                  <Option value="Pasif">Pasif (Giriş Yapamaz)</Option>
+                  <Option value="Bekliyor">Bekliyor</Option>
+                  <Option value="Reddedildi">Reddedildi</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+          <Button
+            type="primary"
+            htmlType="submit"
+            block
+            icon={<IdcardOutlined />}
+          >
+            Bilgileri Güncelle
+          </Button>
+        </Form>
       </Modal>
     </div>
   );

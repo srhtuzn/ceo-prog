@@ -9,6 +9,9 @@ import {
   Tag,
   Table,
   Modal,
+  Space, // <-- BU EKSİKTİ
+  Button,
+  message,
 } from "antd";
 import {
   DollarOutlined,
@@ -17,6 +20,7 @@ import {
   ProjectOutlined,
   ArrowUpOutlined,
   CheckCircleOutlined,
+  UserAddOutlined,
 } from "@ant-design/icons";
 import {
   BarChart,
@@ -43,6 +47,8 @@ export default function AdminDashboard() {
   const [riskModal, setRiskModal] = useState(false);
   const [izinModal, setIzinModal] = useState(false);
   const [projeModal, setProjeModal] = useState(false);
+  const [bekleyenPersonel, setBekleyenPersonel] = useState([]);
+  const [personelModal, setPersonelModal] = useState(false);
 
   // DETAY VERİLERİ
   const [finansDetay, setFinansDetay] = useState([]);
@@ -87,6 +93,39 @@ export default function AdminDashboard() {
         setIzinDetay(bugunYoklar);
         setIzinModal(true);
       });
+  };
+  // Bekleyen personelleri çek
+  const bekleyenleriCek = () => {
+    fetch(`${API_URL}/kullanicilar`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) {
+          // Sadece 'Bekliyor' olanları filtrele
+          setBekleyenPersonel(
+            data.filter((u) => u.hesap_durumu === "Bekliyor")
+          );
+        }
+      });
+  };
+
+  // Sayfa açılınca çek
+  useEffect(() => {
+    bekleyenleriCek();
+    // ... diğer fetchler ...
+  }, []);
+
+  // Onaylama İşlemi
+  const personelOnayla = (id, karar) => {
+    // karar: 'Aktif' veya 'Reddedildi' (Reddedilirse silebiliriz de, şimdilik pasif yapalım)
+    fetch(`${API_URL}/auth/onay/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ durum: karar }),
+    }).then(() => {
+      message.success(`Personel ${karar} edildi.`);
+      bekleyenleriCek(); // Listeyi yenile
+      // Dashboard sayılarını da yenilemek gerekebilir
+    });
   };
 
   if (!veri) return <div style={{ padding: 20 }}>Yükleniyor...</div>;
@@ -171,6 +210,24 @@ export default function AdminDashboard() {
             />
             <div style={{ fontSize: 12, color: "#999", marginTop: 5 }}>
               Proje bazlı detay
+            </div>
+          </Card>
+        </Col>
+        {/* PERSONEL ONAY KARTI */}
+        <Col span={6}>
+          <Card
+            hoverable
+            onClick={() => setPersonelModal(true)}
+            style={{ cursor: "pointer", borderTop: "3px solid #722ed1" }}
+          >
+            <Statistic
+              title="Personel Onayı Bekleyen"
+              value={bekleyenPersonel.length}
+              prefix={<UserAddOutlined />}
+              valueStyle={{ color: "#722ed1" }}
+            />
+            <div style={{ fontSize: 12, color: "#999", marginTop: 5 }}>
+              Katılım istekleri
             </div>
           </Card>
         </Col>
@@ -418,6 +475,52 @@ export default function AdminDashboard() {
             },
           ]}
         />
+      </Modal>
+      {/* PERSONEL ONAY MODALI */}
+      <Modal
+        title="Aramıza Katılmak İsteyenler"
+        open={personelModal}
+        onCancel={() => setPersonelModal(false)}
+        footer={null}
+        width={800}
+      >
+        <Table
+          dataSource={bekleyenPersonel}
+          rowKey="id"
+          pagination={false}
+          columns={[
+            { title: "Ad Soyad", dataIndex: "ad_soyad" },
+            { title: "Departman", dataIndex: "departman" },
+            { title: "Pozisyon", dataIndex: "pozisyon" },
+            { title: "Email", dataIndex: "email" },
+            {
+              title: "İşlem",
+              render: (_, r) => (
+                <Space>
+                  <Button
+                    type="primary"
+                    size="small"
+                    onClick={() => personelOnayla(r.id, "Aktif")}
+                  >
+                    Onayla
+                  </Button>
+                  <Button
+                    danger
+                    size="small"
+                    onClick={() => personelOnayla(r.id, "Reddedildi")}
+                  >
+                    Reddet
+                  </Button>
+                </Space>
+              ),
+            },
+          ]}
+        />
+        {bekleyenPersonel.length === 0 && (
+          <div style={{ padding: 20, textAlign: "center" }}>
+            Bekleyen başvuru yok.
+          </div>
+        )}
       </Modal>
     </div>
   );

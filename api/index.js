@@ -400,6 +400,36 @@ app.put("/kullanicilar/yonetici-sil/:id", async (req, res) => {
     res.status(500).json({ error: "Sunucu hatası" });
   }
 });
+// --- KULLANICI YÖNETİMİ (ADMİN) ---
+
+// KULLANICI GÜNCELLE (Admin Panelinden)
+app.put("/kullanicilar/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { ad_soyad, email, departman, pozisyon, rol, hesap_durumu } =
+      req.body;
+
+    await pool.query(
+      "UPDATE kullanicilar SET ad_soyad=$1, email=$2, departman=$3, pozisyon=$4, rol=$5, hesap_durumu=$6 WHERE id=$7",
+      [ad_soyad, email, departman, pozisyon, rol, hesap_durumu, id]
+    );
+    res.json({ message: "Kullanıcı güncellendi" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+
+// KULLANICI SİL
+app.delete("/kullanicilar/:id", async (req, res) => {
+  try {
+    await pool.query("DELETE FROM kullanicilar WHERE id = $1", [req.params.id]);
+    res.json({ message: "Kullanıcı silindi" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
 // ==========================================
 // --- SATIN ALMA / FİNANS MODÜLÜ ---
 // ==========================================
@@ -555,17 +585,51 @@ app.put("/satin-alma/onay/:id", async (req, res) => {
 
 // --- KİMLİK DOĞRULAMA (AUTH) ---
 
+// A. KAYIT OL (YÖNETİCİ ONAYLI SİSTEM)
 app.post("/auth/register", async (req, res) => {
   try {
     const { ad_soyad, email, sifre, departman, pozisyon, rol } = req.body;
+
+    // 1. Şifreleme
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(sifre, salt);
-    const secilenRol = rol || "Personel";
 
+    // 2. Rol Kontrolü (İlk kayıt olan GM olsun, sonrakiler Onay Beklesin)
+    // Basit mantık: Eğer veritabanı boşsa ilk kişi Aktif GM olur. Değilse Bekliyor olur.
+    const userCount = await pool.query("SELECT COUNT(*) FROM kullanicilar");
+    let durum = "Bekliyor";
+    let secilenRol = rol || "Personel";
+
+    if (parseInt(userCount.rows[0].count) === 0) {
+      durum = "Aktif";
+      secilenRol = "Genel Müdür";
+    }
+
+    // 3. Kullanıcıyı Kaydet
     const newUser = await pool.query(
-      "INSERT INTO kullanicilar (ad_soyad, email, sifre, departman, pozisyon, rol) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
-      [ad_soyad, email, hashedPassword, departman, pozisyon, secilenRol]
+      "INSERT INTO kullanicilar (ad_soyad, email, sifre, departman, pozisyon, rol, hesap_durumu) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
+      [ad_soyad, email, hashedPassword, departman, pozisyon, secilenRol, durum]
     );
+
+    // 4. YÖNETİCİLERE BİLDİRİM AT (Sadece durum 'Bekliyor' ise)
+    if (durum === "Bekliyor") {
+      const bildirimMesajı = `👤 YENİ PERSONEL: "${ad_soyad}" aramıza katılmak istiyor. Onayınız bekleniyor.`;
+
+      // Tüm yöneticileri bul (GM, İK, Müdürler)
+      // Not: Array içindeki rollere sahip herkese gider.
+      const yoneticiler = await pool.query(`
+            SELECT ad_soyad FROM kullanicilar 
+            WHERE rol IN ('Genel Müdür', 'İnsan Kaynakları', 'Yönetim', 'Departman Müdürü')
+        `);
+
+      for (let yonetici of yoneticiler.rows) {
+        await pool.query(
+          "INSERT INTO bildirimler (mesaj, kime) VALUES ($1, $2)",
+          [bildirimMesajı, yonetici.ad_soyad]
+        );
+      }
+    }
+
     res.json(newUser.rows[0]);
   } catch (err) {
     console.error(err.message);
@@ -573,23 +637,43 @@ app.post("/auth/register", async (req, res) => {
   }
 });
 
+// B. GİRİŞ YAP (ONAY KONTROLLÜ)
 app.post("/auth/login", async (req, res) => {
   try {
     const { email, sifre } = req.body;
+
+    // 1. Kullanıcı var mı?
     const user = await pool.query(
       "SELECT * FROM kullanicilar WHERE email = $1",
       [email]
     );
+    if (user.rows.length === 0) {
+      return res.status(401).json("Email veya şifre hatalı");
+    }
 
-    if (user.rows.length === 0)
-      return res.status(401).json("Kullanıcı bulunamadı");
+    // 2. --- YENİ KONTROL: Hesap Onaylı mı? ---
+    if (user.rows[0].hesap_durumu === "Bekliyor") {
+      return res
+        .status(403)
+        .json(
+          "Hesabınız henüz yönetici tarafından onaylanmadı. Lütfen bekleyin."
+        );
+    }
+    if (user.rows[0].hesap_durumu === "Reddedildi") {
+      return res.status(403).json("Üyelik talebiniz reddedilmiştir.");
+    }
+    // -----------------------------------------
 
+    // 3. Şifre Kontrolü
     const validPassword = await bcrypt.compare(sifre, user.rows[0].sifre);
-    if (!validPassword) return res.status(401).json("Şifre hatalı");
+    if (!validPassword) {
+      return res.status(401).json("Email veya şifre hatalı");
+    }
 
     const { sifre: p, ...userInfo } = user.rows[0];
     res.json(userInfo);
   } catch (err) {
+    console.error(err.message);
     res.status(500).send("Sunucu Hatası");
   }
 });
@@ -649,6 +733,22 @@ app.put("/auth/sifre/:id", async (req, res) => {
       id,
     ]);
     res.json({ message: "Şifre değiştirildi" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+// PERSONEL ONAYLA / REDDET
+app.put("/auth/onay/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { durum } = req.body; // 'Aktif' veya 'Reddedildi'
+
+    await pool.query(
+      "UPDATE kullanicilar SET hesap_durumu = $1 WHERE id = $2",
+      [durum, id]
+    );
+    res.json({ message: "Kullanıcı durumu güncellendi." });
   } catch (err) {
     console.error(err.message);
     res.status(500).send("Hata");
