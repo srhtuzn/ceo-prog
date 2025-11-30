@@ -32,7 +32,7 @@ export default function IzinYonetimi({ aktifKullanici }) {
   const [kullanilanIzin, setKullanilanIzin] = useState(0);
   const [yukleniyor, setYukleniyor] = useState(false); // Yükleniyor state'i eklendi
 
-  const TOPLAM_HAK = 14;
+  const [toplamHak, setToplamHak] = useState(14); // Varsayılan 14, veritabanından güncellenecek
 
   // Güvenlik: Kullanıcı verisi yoksa bekle
   if (!aktifKullanici)
@@ -63,21 +63,32 @@ export default function IzinYonetimi({ aktifKullanici }) {
     fetch(`${API_URL}/izinler/kullanilan/${aktifKullanici.ad_soyad}`)
       .then((res) => res.json())
       .then((data) => {
-        setKullanilanIzin(data.kullanılan ? parseInt(data.kullanılan) : 0);
+        setKullanilanIzin(data.kullanılan || 0);
+        setToplamHak(data.toplam_hak || 14); // <-- YENİ: Hakkı güncelle
       })
-      .catch(() => setKullanilanIzin(0));
+      .catch(() => {
+        setKullanilanIzin(0);
+        setToplamHak(14);
+      });
   };
 
   const formGonder = (degerler) => {
-    const payload = {
-      kullanici_id: aktifKullanici.id, // Yöneticiye bildirim için gerekli
-      talep_eden: aktifKullanici.ad_soyad,
-      departman: aktifKullanici.departman,
-      tur: degerler.tur,
-      aciklama: degerler.aciklama,
-      baslangic_tarihi: degerler.tarih[0].format("YYYY-MM-DD"),
-      bitis_tarihi: degerler.tarih[1].format("YYYY-MM-DD"),
-    };
+    // 1. Gün Hesabı
+    const start = dayjs(degerler.tarih[0]);
+    const end = dayjs(degerler.tarih[1]);
+    const talepEdilenGun = end.diff(start, "day") + 1;
+
+    // 2. KONTROL: Hak yetiyor mu?
+    const kalanHak = toplamHak - kullanilanIzin;
+
+    // Sadece Yıllık İzinse kontrol et (Rapor/Mazeret hakkı etkilemez genelde ama siz bilirsiniz)
+    if (degerler.tur === "Yıllık İzin" && talepEdilenGun > kalanHak) {
+      Modal.error({
+        title: "Yetersiz İzin Hakkı!",
+        content: `Kalan hakkınız: ${kalanHak} gün. Talep edilen: ${talepEdilenGun} gün. Lütfen tarihi düzeltin veya yöneticinizle görüşün.`,
+      });
+      return; // <--- İŞLEMİ DURDUR
+    }
 
     fetch(`${API_URL}/izinler`, {
       method: "POST",
@@ -257,7 +268,7 @@ export default function IzinYonetimi({ aktifKullanici }) {
         <Card>
           <Row gutter={16} style={{ textAlign: "center" }}>
             <Col span={8}>
-              <Statistic title="Toplam Hak" value={TOPLAM_HAK} suffix="Gün" />
+              <Statistic title="Toplam Hak" value={toplamHak} suffix="Gün" />
             </Col>
             <Col span={8}>
               <Statistic
@@ -270,9 +281,9 @@ export default function IzinYonetimi({ aktifKullanici }) {
             <Col span={8}>
               <Statistic
                 title="Kalan"
-                value={TOPLAM_HAK - kullanilanIzin}
+                value={toplamHak - kullanilanIzin}
                 valueStyle={{
-                  color: TOPLAM_HAK - kullanilanIzin < 3 ? "red" : "#3f8600",
+                  color: toplamHak - kullanilanIzin < 3 ? "red" : "#3f8600",
                 }}
                 suffix="Gün"
               />

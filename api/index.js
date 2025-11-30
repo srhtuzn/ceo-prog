@@ -403,15 +403,33 @@ app.put("/kullanicilar/yonetici-sil/:id", async (req, res) => {
 // --- KULLANICI YÖNETİMİ (ADMİN) ---
 
 // KULLANICI GÜNCELLE (Admin Panelinden)
+// 1. KULLANICI BİLGİLERİNİ GÜNCELLE (ADMİN) - GÜNCELLENDİ
 app.put("/kullanicilar/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { ad_soyad, email, departman, pozisyon, rol, hesap_durumu } =
-      req.body;
+    // 'toplam_izin_hakki' eklendi
+    const {
+      ad_soyad,
+      email,
+      departman,
+      pozisyon,
+      rol,
+      hesap_durumu,
+      toplam_izin_hakki,
+    } = req.body;
 
     await pool.query(
-      "UPDATE kullanicilar SET ad_soyad=$1, email=$2, departman=$3, pozisyon=$4, rol=$5, hesap_durumu=$6 WHERE id=$7",
-      [ad_soyad, email, departman, pozisyon, rol, hesap_durumu, id]
+      "UPDATE kullanicilar SET ad_soyad=$1, email=$2, departman=$3, pozisyon=$4, rol=$5, hesap_durumu=$6, toplam_izin_hakki=$7 WHERE id=$8",
+      [
+        ad_soyad,
+        email,
+        departman,
+        pozisyon,
+        rol,
+        hesap_durumu,
+        toplam_izin_hakki,
+        id,
+      ]
     );
     res.json({ message: "Kullanıcı güncellendi" });
   } catch (err) {
@@ -967,17 +985,32 @@ app.put("/izinler/onay/:id", async (req, res) => {
     res.status(500).send("Hata");
   }
 });
-// 4. KULLANILAN İZİN GÜNÜNÜ HESAPLA (YENİ)
+// 4. KULLANILAN İZİN DURUMUNU GETİR (Kullanılan + Toplam Hak)
 app.get("/izinler/kullanilan/:ad_soyad", async (req, res) => {
   try {
     const { ad_soyad } = req.params;
-    // Sadece 'Onaylandı' olan izinlerin gün sayılarını topla
-    const result = await pool.query(
+
+    // 1. Kullanılan Gün Toplamı
+    const kullanılanRes = await pool.query(
       "SELECT SUM(gun_sayisi) as toplam FROM izinler WHERE talep_eden = $1 AND durum LIKE 'Onaylandı%'",
       [ad_soyad]
     );
-    // Eğer hiç izin yoksa 0 döndür, varsa toplamı döndür
-    res.json({ kullanılan: result.rows[0].toplam || 0 });
+
+    // 2. Kullanıcının Toplam Hakkı
+    const hakRes = await pool.query(
+      "SELECT toplam_izin_hakki FROM kullanicilar WHERE ad_soyad = $1",
+      [ad_soyad]
+    );
+
+    const kullanilan = kullanılanRes.rows[0].toplam || 0;
+    // Eğer kullanıcı bulunamazsa default 14 dön
+    const toplamHak =
+      hakRes.rows.length > 0 ? hakRes.rows[0].toplam_izin_hakki : 14;
+
+    res.json({
+      kullanılan: parseInt(kullanilan),
+      toplam_hak: parseInt(toplamHak),
+    });
   } catch (err) {
     console.error(err.message);
   }

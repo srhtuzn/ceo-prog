@@ -418,6 +418,14 @@ export default function EkipYonetimi({ aktifKullanici }) {
                 </Select>
               </Form.Item>
             </Col>
+            <Col span={12}>
+              <Form.Item
+                name="toplam_izin_hakki"
+                label="Yıllık İzin Hakkı (Gün)"
+              >
+                <Input type="number" />
+              </Form.Item>
+            </Col>
           </Row>
           <Button
             type="primary"
