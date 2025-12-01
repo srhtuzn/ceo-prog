@@ -5,6 +5,8 @@ import IzinYonetimi from "./IzinYonetimi";
 import EkipYonetimi from "./EkipYonetimi";
 import AdminDashboard from "./AdminDashboard";
 import GorevYonetimi from "./GorevYonetimi"; // <-- GÖREVLER BURADAN GELİYOR
+import DosyaYoneticisi from "./DosyaYoneticisi";
+import ProfilYonetimi from "./ProfilYonetimi";
 import {
   DesktopOutlined,
   UnorderedListOutlined,
@@ -19,6 +21,7 @@ import {
   AppstoreOutlined, // <-- Pano ikonu
   MenuUnfoldOutlined, // <-- Menü açma
   MenuFoldOutlined, // <-- Menü kapama
+  FolderOpenOutlined,
 } from "@ant-design/icons";
 import {
   Layout,
@@ -56,6 +59,10 @@ function App() {
     localStorage.removeItem("wf_user");
     setAktifKullanici(null);
     window.location.reload();
+  };
+  const kullaniciGuncelle = (yeniKullanici) => {
+    setAktifKullanici(yeniKullanici);
+    localStorage.setItem("wf_user", JSON.stringify(yeniKullanici));
   };
 
   // --- STATE'LER ---
@@ -111,6 +118,11 @@ function App() {
       key: "ekip",
       icon: <UsergroupAddOutlined />,
       label: "Ekip / Organizasyon",
+    },
+    {
+      key: "drive",
+      icon: <FolderOpenOutlined />,
+      label: "Şirket Arşivi / Drive",
     },
   ];
 
@@ -377,6 +389,9 @@ function App() {
               viewMode={sayfa} // <-- KRİTİK NOKTA: GÖRÜNÜM MODUNU GÖNDERİYORUZ
             />
           )}
+          {sayfa === "drive" && (
+            <DosyaYoneticisi aktifKullanici={aktifKullanici} />
+          )}
 
           {sayfa === "satinalma" && (
             <SatinAlma aktifKullanici={aktifKullanici} />
@@ -418,18 +433,13 @@ function App() {
         </Form>
       </Modal>
 
-      <Modal
-        title="Hesap Ayarları"
-        open={profilModalAcik}
-        onCancel={() => setProfilModalAcik(false)}
-        footer={null}
-        width={600}
-        destroyOnClose
-      >
-        <div style={{ padding: 20, textAlign: "center" }}>
-          Profil Ayarları Modülü buraya gelecek.
-        </div>
-      </Modal>
+      {/* --- PROFİL MODÜLÜ (YENİ DOSYADAN) --- */}
+      <ProfilYonetimi
+        acik={profilModalAcik}
+        kapat={() => setProfilModalAcik(false)}
+        aktifKullanici={aktifKullanici}
+        guncelle={kullaniciGuncelle}
+      />
     </Layout>
   );
 }

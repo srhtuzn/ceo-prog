@@ -8,8 +8,15 @@ const fs = require("fs");
 const bcrypt = require("bcryptjs"); // Tek seferde tanımladık
 
 // --- 1. AYARLAR VE MIDDLEWARE ---
-app.use(cors());
-app.use(express.json());
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // Uploads klasörü kontrolü
 const uploadDir = "uploads";
@@ -33,6 +40,36 @@ const upload = multer({ storage: storage });
 // ==========================================
 // ROTALAR (ENDPOINTS)
 // ==========================================
+async function klasorHiyerarsisiOlustur(klasorAdlari, olusturan) {
+  let ustKlasorId = null;
+
+  for (const ad of klasorAdlari) {
+    if (!ad) continue;
+
+    let sorgu = "SELECT id FROM klasorler WHERE ad = $1";
+    let params = [ad];
+
+    if (ustKlasorId) {
+      sorgu += " AND ust_klasor_id = $2";
+      params.push(ustKlasorId);
+    } else {
+      sorgu += " AND ust_klasor_id IS NULL";
+    }
+
+    const varMi = await pool.query(sorgu, params);
+
+    if (varMi.rows.length > 0) {
+      ustKlasorId = varMi.rows[0].id;
+    } else {
+      const yeni = await pool.query(
+        "INSERT INTO klasorler (ad, ust_klasor_id, olusturan) VALUES ($1, $2, $3) RETURNING id",
+        [ad, ustKlasorId, olusturan]
+      );
+      ustKlasorId = yeni.rows[0].id;
+    }
+  }
+  return ustKlasorId;
+}
 
 // --- GÖREV YÖNETİMİ ---
 
@@ -40,21 +77,45 @@ const upload = multer({ storage: storage });
 app.get("/gorevler", async (req, res) => {
   try {
     const result = await pool.query(`
-            SELECT g.*, p.ad as proje_adi 
-            FROM gorevler g
-            LEFT JOIN projeler p ON g.proje_id = p.id
-            ORDER BY g.id ASC
-        `);
+      SELECT g.*, p.ad as proje_adi 
+      FROM gorevler g
+      LEFT JOIN projeler p ON g.proje_id = p.id
+      ORDER BY g.id ASC
+    `);
     res.json(result.rows);
   } catch (err) {
     console.error(err.message);
+    res.status(500).send("Sunucu hatası");
+  }
+});
+app.get("/gorevler/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      `
+      SELECT g.*, p.ad as proje_adi 
+      FROM gorevler g
+      LEFT JOIN projeler p ON g.proje_id = p.id
+      WHERE g.id = $1
+    `,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Görev bulunamadı" });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Sunucu hatası");
   }
 });
 
-// 2. GÖREV EKLEME (GÜNCELLENDİ: TEKRAR TİPİ EKLENDİ)
-app.post("/gorevler", upload.single("dosya"), async (req, res) => {
+// 2. GÖREV EKLEME (ÇOKLU DOSYA + AKILLI KLASÖRLEME)
+// Dikkat: 'dosyalar' adında array bekliyoruz, max 10 dosya
+app.post("/gorevler", upload.array("dosyalar", 10), async (req, res) => {
   try {
-    // tekrar_tipi parametresi eklendi
     const {
       baslik,
       aciklama,
@@ -65,8 +126,8 @@ app.post("/gorevler", upload.single("dosya"), async (req, res) => {
       proje_id,
       tekrar_tipi,
     } = req.body;
-    const dosya_yolu = req.file ? req.file.filename : null;
 
+    // JSON parse
     let atananlarParsed = atananlar ? JSON.parse(atananlar) : [];
     let gozlemcilerParsed = gozlemciler ? JSON.parse(gozlemciler) : [];
     const pid =
@@ -74,6 +135,16 @@ app.post("/gorevler", upload.single("dosya"), async (req, res) => {
         ? proje_id
         : null;
 
+    // Not: Dosya yolu sütununa, eğer tek dosya ise ismini, çoksa "Çoklu Dosya" yazarız
+    //veya ilk dosyanın adını yazarız. UI'da göstermek için.
+    const dosya_yolu_db =
+      req.files && req.files.length > 0
+        ? req.files.length === 1
+          ? req.files[0].filename
+          : "COKLU_DOSYA"
+        : null;
+
+    // 1. GÖREVİ KAYDET
     const result = await pool.query(
       "INSERT INTO gorevler (baslik, aciklama, oncelik, tarih, durum, atananlar, gozlemciler, dosya_yolu, proje_id, tekrar_tipi) VALUES ($1, $2, $3, $4, 'Bekliyor', $5, $6, $7, $8, $9) RETURNING *",
       [
@@ -83,72 +154,250 @@ app.post("/gorevler", upload.single("dosya"), async (req, res) => {
         tarih,
         atananlarParsed,
         gozlemcilerParsed,
-        dosya_yolu,
+        dosya_yolu_db,
         pid,
         tekrar_tipi || "Tek Seferlik",
       ]
     );
+    const yeniGorevId = result.rows[0].id;
+
+    // 2. DRIVE MANTIĞI 🧠
+    if (req.files && req.files.length > 0) {
+      const olusturanKisi = "Sistem";
+      let hedefKlasorId = null;
+
+      // A. Ana Rotayı Belirle: [Departman] > [Proje] veya [Genel Görevler]
+      let anaRotaKlasorId = null;
+      if (pid) {
+        const projeBilgi = await pool.query(
+          "SELECT ad, departman FROM projeler WHERE id = $1",
+          [pid]
+        );
+        if (projeBilgi.rows.length > 0) {
+          const { ad: projeAdi, departman: projeDepartman } =
+            projeBilgi.rows[0];
+          anaRotaKlasorId = await klasorHiyerarsisiOlustur(
+            [projeDepartman, projeAdi],
+            olusturanKisi
+          );
+        }
+      } else {
+        anaRotaKlasorId = await klasorHiyerarsisiOlustur(
+          ["Genel Görevler"],
+          olusturanKisi
+        );
+      }
+
+      // B. Dosya Sayısına Göre Karar Ver
+      if (req.files.length > 1) {
+        // DURUM 1: BİRDEN FAZLA DOSYA VAR -> GÖREV İÇİN KLASÖR AÇ
+        // Format: [Departman] > [Proje] > [#125 - Görev Başlığı]
+        const gorevKlasorAdi = `#${yeniGorevId} - ${baslik}`;
+
+        // Bu klasörü oluştur (anaRotaKlasorId'nin içine)
+        const gorevKlasorRes = await pool.query(
+          "INSERT INTO klasorler (ad, ust_klasor_id, olusturan) VALUES ($1, $2, $3) RETURNING id",
+          [gorevKlasorAdi, anaRotaKlasorId, olusturanKisi]
+        );
+        hedefKlasorId = gorevKlasorRes.rows[0].id;
+      } else {
+        // DURUM 2: TEK DOSYA VAR -> DİREKT PROJE KLASÖRÜNE KOY
+        hedefKlasorId = anaRotaKlasorId;
+      }
+
+      // C. Dosyaları Kaydet (Döngü ile)
+      for (const file of req.files) {
+        let finalAd = file.originalname;
+
+        // Eğer Tek dosya ise ve proje klasörüne koyuyorsak karışmasın diye ID ekleyelim
+        if (req.files.length === 1) {
+          finalAd = `#${yeniGorevId} - ${file.originalname}`;
+        }
+        // Eğer Görev klasörünün içindeysek dosya adını orjinal bırakabiliriz veya başına tarih atabiliriz
+        // (Şimdilik orjinal bırakıyoruz, çünkü zaten özel klasörde)
+
+        await pool.query(
+          "INSERT INTO dosyalar (ad, fiziksel_ad, dosya_yolu, uzanti, boyut, yukleyen, klasor_id, tarih) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())",
+          [
+            finalAd,
+            file.filename,
+            file.filename,
+            path.extname(file.originalname),
+            file.size,
+            "Görev Sistemi",
+            hedefKlasorId,
+          ]
+        );
+      }
+    }
+
     res.json(result.rows[0]);
   } catch (err) {
     console.error("KAYIT HATASI:", err.message);
     res.status(500).send(err.message);
   }
 });
-
-// 3. Görev Silme
+// 4. Görev Silme
 app.delete("/gorevler/:id", async (req, res) => {
   try {
-    await pool.query("DELETE FROM gorevler WHERE id = $1", [req.params.id]);
-    res.json({ mesaj: "Silindi" });
+    const { id } = req.params;
+
+    // Önce görevin dosya yolunu al
+    const gorevSorgu = await pool.query(
+      "SELECT dosya_yolu FROM gorevler WHERE id = $1",
+      [id]
+    );
+
+    if (gorevSorgu.rows.length === 0) {
+      return res.status(404).json({ error: "Görev bulunamadı" });
+    }
+
+    await pool.query("DELETE FROM gorevler WHERE id = $1", [id]);
+    res.json({ mesaj: "Görev silindi" });
   } catch (err) {
     console.error(err.message);
+    res.status(500).json({ error: "Silme hatası" });
   }
 });
 
-// 4. Görev Durumu Güncelleme (Bildirimli)
-app.put("/gorevler/:id", async (req, res) => {
+// 3. GÖREV GÜNCELLEME (DOSYA YÜKLEME DESTEKLİ - YENİ)
+app.put("/gorevler/:id", upload.single("dosya"), async (req, res) => {
   try {
     const { id } = req.params;
-    const { durum } = req.body;
+    const {
+      baslik,
+      aciklama,
+      oncelik,
+      tarih,
+      durum,
+      atananlar,
+      gozlemciler,
+      proje_id,
+      tekrar_tipi,
+    } = req.body;
 
-    // Eski durumu al
+    const yeni_dosya_yolu = req.file ? req.file.filename : undefined;
+
+    // 1. Önce eski kaydı çek
     const eskiGorevSorgu = await pool.query(
       "SELECT * FROM gorevler WHERE id = $1",
       [id]
     );
-    const eskiGorev = eskiGorevSorgu.rows[0];
 
-    let yeniDurum = durum;
-    if (!yeniDurum) {
-      yeniDurum = eskiGorev.durum === "Yapıldı" ? "Bekliyor" : "Yapıldı";
+    if (eskiGorevSorgu.rows.length === 0) {
+      return res.status(404).json({ error: "Görev bulunamadı" });
     }
 
-    // Güncelle
-    const update = await pool.query(
-      "UPDATE gorevler SET durum = $1 WHERE id = $2 RETURNING *",
-      [yeniDurum, id]
-    );
+    const eskiGorev = eskiGorevSorgu.rows[0];
 
-    // Bildirim Oluştur
-    let bildirimMesajı = "";
-    if (yeniDurum === "Onay Bekliyor")
-      bildirimMesajı = `⚠️ "${eskiGorev.baslik}" onaya sunuldu.`;
-    else if (yeniDurum === "Yapıldı")
-      bildirimMesajı = `✅ "${eskiGorev.baslik}" tamamlandı.`;
-    else if (yeniDurum === "Bekliyor" && eskiGorev.durum === "Onay Bekliyor")
-      bildirimMesajı = `❌ "${eskiGorev.baslik}" reddedildi.`;
+    // 2. JSON parse işlemi (güvenli)
+    let atananlarParsed = eskiGorev.atananlar;
+    let gozlemcilerParsed = eskiGorev.gozlemciler;
 
-    if (bildirimMesajı) {
-      await pool.query(
-        "INSERT INTO bildirimler (mesaj, kime, gorev_id) VALUES ($1, $2, $3)",
-        [bildirimMesajı, "İlgililer", id]
+    try {
+      if (atananlar !== undefined) {
+        atananlarParsed = atananlar
+          ? JSON.parse(atananlar)
+          : eskiGorev.atananlar;
+      }
+      if (gozlemciler !== undefined) {
+        gozlemcilerParsed = gozlemciler
+          ? JSON.parse(gozlemciler)
+          : eskiGorev.gozlemciler;
+      }
+    } catch (parseErr) {
+      console.warn(
+        "JSON parse hatası, eski değerler korunuyor:",
+        parseErr.message
       );
     }
 
-    res.json(update.rows[0]);
+    // 3. Yeni değerleri belirle
+    const y_baslik = baslik !== undefined ? baslik : eskiGorev.baslik;
+    const y_aciklama = aciklama !== undefined ? aciklama : eskiGorev.aciklama;
+    const y_oncelik = oncelik !== undefined ? oncelik : eskiGorev.oncelik;
+    const y_tarih = tarih !== undefined ? tarih : eskiGorev.tarih;
+    const y_durum = durum !== undefined ? durum : eskiGorev.durum;
+    const y_proje_id =
+      proje_id && proje_id !== "null" ? proje_id : eskiGorev.proje_id;
+    const y_tekrar_tipi =
+      tekrar_tipi !== undefined ? tekrar_tipi : eskiGorev.tekrar_tipi;
+
+    // Dosya yolu: yeni dosya varsa onu kullan, yoksa eskisini koru
+    const y_dosya_yolu =
+      yeni_dosya_yolu !== undefined ? yeni_dosya_yolu : eskiGorev.dosya_yolu;
+
+    // 4. Veritabanını Güncelle
+    const update = await pool.query(
+      `UPDATE gorevler SET 
+       baslik=$1, aciklama=$2, oncelik=$3, tarih=$4, durum=$5, 
+       atananlar=$6, gozlemciler=$7, proje_id=$8, tekrar_tipi=$9, dosya_yolu=$10
+       WHERE id=$11 RETURNING *`,
+      [
+        y_baslik,
+        y_aciklama,
+        y_oncelik,
+        y_tarih,
+        y_durum,
+        atananlarParsed,
+        gozlemcilerParsed,
+        y_proje_id,
+        y_tekrar_tipi,
+        y_dosya_yolu,
+        id,
+      ]
+    );
+
+    // 5. YENİ DOSYA VARSA DRIVE'A KAYDET
+    if (req.file) {
+      await pool.query(
+        `INSERT INTO dosyalar 
+         (ad, fiziksel_ad, dosya_yolu, uzanti, boyut, yukleyen, tarih) 
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+        [
+          req.file.originalname,
+          req.file.filename,
+          req.file.filename,
+          path.extname(req.file.originalname),
+          req.file.size,
+          "Görev Sistemi",
+        ]
+      );
+    }
+
+    // 6. Bildirim Mantığı
+    if (y_durum !== eskiGorev.durum) {
+      let bildirimMesajı = "";
+      if (y_durum === "Onay Bekliyor")
+        bildirimMesajı = `⚠️ "${y_baslik}" onaya sunuldu.`;
+      else if (y_durum === "Yapıldı")
+        bildirimMesajı = `✅ "${y_baslik}" tamamlandı.`;
+      else if (y_durum === "Bekliyor" && eskiGorev.durum === "Onay Bekliyor")
+        bildirimMesajı = `❌ "${y_baslik}" reddedildi.`;
+
+      if (bildirimMesajı) {
+        await pool.query(
+          "INSERT INTO bildirimler (mesaj, kime, gorev_id) VALUES ($1, $2, $3)",
+          [bildirimMesajı, "İlgililer", id]
+        );
+      }
+    }
+
+    // 7. Güncellenmiş veriyi proje bilgisiyle döndür
+    const finalResult = await pool.query(
+      `
+      SELECT g.*, p.ad as proje_adi 
+      FROM gorevler g
+      LEFT JOIN projeler p ON g.proje_id = p.id
+      WHERE g.id = $1
+    `,
+      [id]
+    );
+
+    res.json(finalResult.rows[0]);
   } catch (err) {
-    console.error(err.message);
-    res.status(500).send("Hata");
+    console.error("GÖREV GÜNCELLEME HATASI:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -1069,6 +1318,374 @@ app.delete("/alt-gorevler/:id", async (req, res) => {
     res.json({ message: "Silindi" });
   } catch (err) {
     console.error(err.message);
+  }
+});
+// ==========================================
+// --- DRIVE / ARŞİV MODÜLÜ ---
+// ==========================================
+
+// 1. KLASÖR İÇERİĞİNİ GETİR (DEPARTMAN GİZLİLİĞİ + SOFT DELETE DESTEKLİ 🔒)
+app.get("/drive/icerik", async (req, res) => {
+  try {
+    const { klasor_id, userId } = req.query;
+
+    let klasorQuery = "";
+    let dosyaQuery = "";
+    let params = [];
+
+    // KULLANICI BİLGİSİNİ ÇEK
+    let userDepartman = "";
+    let userRol = "";
+    if (userId) {
+      const u = await pool.query(
+        "SELECT departman, rol FROM kullanicilar WHERE id=$1",
+        [userId]
+      );
+      if (u.rows.length > 0) {
+        userDepartman = u.rows[0].departman;
+        userRol = u.rows[0].rol;
+      }
+    }
+
+    if (klasor_id && klasor_id !== "null") {
+      // --- ALT KLASÖRDEYİZ ---
+      // Filtre yok, içeriği gör AMA silinenleri gizle
+      klasorQuery =
+        "SELECT * FROM klasorler WHERE ust_klasor_id = $1 AND silindi = FALSE ORDER BY ad ASC";
+      dosyaQuery =
+        "SELECT * FROM dosyalar WHERE klasor_id = $1 AND silindi = FALSE ORDER BY id DESC";
+      params = [klasor_id];
+    } else {
+      // --- ANA DİZİNDEYİZ (ROOT) ---
+
+      // Eğer Genel Müdür ise her şeyi görsün (Silinmemiş olanları)
+      if (userRol === "Genel Müdür") {
+        klasorQuery =
+          "SELECT * FROM klasorler WHERE ust_klasor_id IS NULL AND silindi = FALSE ORDER BY ad ASC";
+      } else {
+        // Personel: Sadece Kendi Departmanını VEYA "Genel/Ortak" klasörleri gör (Silinmemiş olanları)
+        klasorQuery = `
+            SELECT * FROM klasorler 
+            WHERE ust_klasor_id IS NULL 
+            AND silindi = FALSE
+            AND (ad = $1 OR ad ILIKE '%Genel%' OR ad ILIKE '%Ortak%') 
+            ORDER BY ad ASC
+          `;
+        params = [userDepartman];
+      }
+
+      // Root'taki dosyalar (Silinmemiş olanlar)
+      dosyaQuery =
+        "SELECT * FROM dosyalar WHERE klasor_id IS NULL AND silindi = FALSE ORDER BY id DESC";
+    }
+
+    // Klasörleri Çek
+    const klasorler = await pool.query(klasorQuery, params);
+
+    // Dosyaları Çek
+    let dosyalar;
+    if (klasor_id && klasor_id !== "null") {
+      // Alt klasördeysek params (klasor_id) kullan
+      dosyalar = await pool.query(dosyaQuery, params);
+    } else {
+      // Ana dizindeysek params kullanma (dosyaQuery parametre içermiyor)
+      dosyalar = await pool.query(dosyaQuery);
+    }
+
+    // Breadcrumb için aktif klasör adı
+    let aktifKlasorAdi = "Şirket Arşivi";
+    if (klasor_id && klasor_id !== "null") {
+      const current = await pool.query(
+        "SELECT ad FROM klasorler WHERE id = $1",
+        [klasor_id]
+      );
+      if (current.rows.length > 0) aktifKlasorAdi = current.rows[0].ad;
+    }
+
+    res.json({
+      klasorler: klasorler.rows,
+      dosyalar: dosyalar.rows,
+      aktifKlasorAdi: aktifKlasorAdi,
+    });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+
+// 2. YENİ KLASÖR OLUŞTUR
+app.post("/drive/klasor", async (req, res) => {
+  try {
+    const { ad, ust_klasor_id, olusturan } = req.body;
+    const pid =
+      ust_klasor_id && ust_klasor_id !== "null" ? ust_klasor_id : null;
+
+    await pool.query(
+      "INSERT INTO klasorler (ad, ust_klasor_id, olusturan) VALUES ($1, $2, $3)",
+      [ad, pid, olusturan]
+    );
+    res.json({ message: "Klasör oluşturuldu" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+
+// 3. DOSYA YÜKLE (DRIVE İÇİN ÖZEL)
+app.post("/drive/dosya", upload.single("dosya"), async (req, res) => {
+  try {
+    const { klasor_id, yukleyen } = req.body;
+    const file = req.file;
+
+    if (!file) return res.status(400).send("Dosya yok");
+
+    const pid = klasor_id && klasor_id !== "null" ? klasor_id : null;
+    const dosyaYolu = file.filename; // İleride burası S3 URL'i olacak
+
+    await pool.query(
+      "INSERT INTO dosyalar (ad, fiziksel_ad, dosya_yolu, uzanti, boyut, klasor_id, yukleyen) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+      [
+        file.originalname,
+        file.filename,
+        dosyaYolu,
+        path.extname(file.originalname),
+        file.size,
+        pid,
+        yukleyen,
+      ]
+    );
+
+    res.json({ message: "Dosya yüklendi" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+
+// 4. DOSYA ARA (Global Search)
+app.get("/drive/ara", async (req, res) => {
+  try {
+    const { q } = req.query;
+    const result = await pool.query(
+      "SELECT * FROM dosyalar WHERE ad ILIKE $1 ORDER BY tarih DESC",
+      [`%${q}%`]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err.message);
+  }
+});
+// 5. DOSYA ADINI DEĞİŞTİR (RENAME)
+app.put("/drive/dosya/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { yeniAd } = req.body; // Örn: "Yeni Rapor Adı"
+
+    // 1. Dosyanın mevcut uzantısını korumak için önce veriyi çekelim
+    const dosya = await pool.query(
+      "SELECT ad, uzanti FROM dosyalar WHERE id = $1",
+      [id]
+    );
+
+    if (dosya.rows.length === 0) {
+      return res.status(404).json({ error: "Dosya bulunamadı" });
+    }
+
+    const mevcutUzanti = dosya.rows[0].uzanti;
+    let finalAd = yeniAd;
+
+    // Kullanıcı uzantıyı yazmadıysa biz ekleyelim ki dosya bozuk görünmesin
+    if (!finalAd.endsWith(mevcutUzanti)) {
+      finalAd += mevcutUzanti;
+    }
+
+    // 2. Sadece Veritabanındaki ismini güncelle (Fiziksel isme dokunma)
+    await pool.query("UPDATE dosyalar SET ad = $1 WHERE id = $2", [
+      finalAd,
+      id,
+    ]);
+
+    res.json({ message: "Dosya adı güncellendi", yeniAd: finalAd });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+// 6. DOSYA SİL (SOFT DELETE - ÇÖP KUTUSUNA GÖNDER)
+app.delete("/drive/dosya/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query("UPDATE dosyalar SET silindi = TRUE WHERE id = $1", [id]);
+    res.json({ message: "Dosya çöp kutusuna taşındı" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+
+// 7. DOSYA TAŞIMA (Sürükle-Bırak İçin)
+app.put("/drive/tasi", async (req, res) => {
+  try {
+    const { dosyaId, hedefKlasorId } = req.body;
+
+    // Klasör ID null ise (Ana Dizin) veya sayı ise güncelle
+    await pool.query("UPDATE dosyalar SET klasor_id = $1 WHERE id = $2", [
+      hedefKlasorId,
+      dosyaId,
+    ]);
+
+    res.json({ message: "Dosya taşındı" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Taşıma hatası");
+  }
+});
+// 8. DOSYA KOPYALA (Copy & Paste İçin)
+app.post("/drive/kopyala", async (req, res) => {
+  try {
+    const { dosyaId, hedefKlasorId } = req.body;
+
+    // 1. Kaynak dosyayı bul
+    const kaynak = await pool.query("SELECT * FROM dosyalar WHERE id = $1", [
+      dosyaId,
+    ]);
+    if (kaynak.rows.length === 0)
+      return res.status(404).json({ error: "Dosya yok" });
+
+    const dosya = kaynak.rows[0];
+
+    // 2. Yeni fiziksel isim üret (Çakışmayı önlemek için timestamp ekle)
+    const yeniFizikselAd = `copy_${Date.now()}_${dosya.fiziksel_ad}`;
+    const kaynakYol = path.join(__dirname, "uploads", dosya.fiziksel_ad);
+    const hedefYol = path.join(__dirname, "uploads", yeniFizikselAd);
+
+    // 3. Fiziksel dosyayı kopyala (fs modülü ile)
+    if (fs.existsSync(kaynakYol)) {
+      fs.copyFileSync(kaynakYol, hedefYol);
+    } else {
+      return res.status(500).json({ error: "Fiziksel dosya bulunamadı" });
+    }
+
+    // 4. Veritabanına yeni kayıt ekle
+    // Not: Adının sonuna "- Kopya" ekleyebiliriz veya aynı bırakabiliriz.
+    const yeniAd = `${path.parse(dosya.ad).name} - Kopya${dosya.uzanti}`;
+
+    await pool.query(
+      "INSERT INTO dosyalar (ad, fiziksel_ad, dosya_yolu, uzanti, boyut, yukleyen, klasor_id, tarih) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())",
+      [
+        yeniAd,
+        yeniFizikselAd,
+        yeniFizikselAd,
+        dosya.uzanti,
+        dosya.boyut,
+        dosya.yukleyen,
+        hedefKlasorId,
+      ]
+    );
+
+    res.json({ message: "Dosya kopyalandı" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Kopyalama hatası");
+  }
+});
+// 9. KLASÖR SİL (SOFT DELETE)
+app.delete("/drive/klasor/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Klasörü sildiğinde içindekiler veritabanında "silindi" işaretlenmese bile,
+    // hiyerarşik olarak erişilemeyeceği için gizlenmiş olur.
+    // Ancak temizlik için recursive (iç içe) silme yapılabilir, şimdilik basit tutalım:
+    await pool.query("UPDATE klasorler SET silindi = TRUE WHERE id = $1", [id]);
+    res.json({ message: "Klasör çöp kutusuna taşındı" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+// 10. ÇÖP KUTUSUNU GETİR
+app.get("/drive/cop-kutusu", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    // Burada güvenlik filtresi (departman vb.) uygulanabilir. Şimdilik basitleştirilmiş:
+    const klasorler = await pool.query(
+      "SELECT * FROM klasorler WHERE silindi = TRUE ORDER BY id DESC"
+    );
+    const dosyalar = await pool.query(
+      "SELECT * FROM dosyalar WHERE silindi = TRUE ORDER BY id DESC"
+    );
+
+    res.json({ klasorler: klasorler.rows, dosyalar: dosyalar.rows });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+
+// 11. GERİ YÜKLE (RESTORE)
+app.put("/drive/geri-yukle", async (req, res) => {
+  try {
+    const { id, tip } = req.body; // tip: 'dosya' veya 'klasor'
+
+    if (tip === "dosya") {
+      await pool.query("UPDATE dosyalar SET silindi = FALSE WHERE id = $1", [
+        id,
+      ]);
+    } else {
+      await pool.query("UPDATE klasorler SET silindi = FALSE WHERE id = $1", [
+        id,
+      ]);
+    }
+    res.json({ message: "Geri yüklendi" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+
+// 12. KALICI SİL (HARD DELETE)
+app.delete("/drive/kalici-sil", async (req, res) => {
+  try {
+    const { id, tip } = req.body; // tip: 'dosya' veya 'klasor'
+
+    if (tip === "dosya") {
+      // Fiziksel silme de yapılmalı
+      const dosya = await pool.query(
+        "SELECT fiziksel_ad FROM dosyalar WHERE id = $1",
+        [id]
+      );
+      if (dosya.rows.length > 0) {
+        const yol = path.join(__dirname, "uploads", dosya.rows[0].fiziksel_ad);
+        if (fs.existsSync(yol)) fs.unlinkSync(yol);
+      }
+      await pool.query("DELETE FROM dosyalar WHERE id = $1", [id]);
+    } else {
+      // Klasör kalıcı silinirse içindeki her şey de silinmeli (Cascade)
+      // Şimdilik sadece kaydı siliyoruz
+      await pool.query("DELETE FROM klasorler WHERE id = $1", [id]);
+    }
+    res.json({ message: "Kalıcı olarak silindi" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+
+// 13. KLASÖR TAŞIMA (Sürükle-Bırak İçin)
+app.put("/drive/klasor-tasi", async (req, res) => {
+  try {
+    const { klasorId, hedefKlasorId } = req.body;
+    if (parseInt(klasorId) === parseInt(hedefKlasorId))
+      return res.status(400).send("Kendine taşıyamazsın");
+
+    await pool.query("UPDATE klasorler SET ust_klasor_id = $1 WHERE id = $2", [
+      hedefKlasorId,
+      klasorId,
+    ]);
+    res.json({ message: "Klasör taşındı" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
   }
 });
 

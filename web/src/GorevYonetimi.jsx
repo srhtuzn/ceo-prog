@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import {
   Table,
   Button,
+  Card,
+  Tag,
   Modal,
   Form,
   Input,
@@ -21,13 +23,13 @@ import {
   Checkbox,
   Avatar,
   Mentions,
-  Tag,
   Calendar,
 } from "antd";
 import {
   PlusOutlined,
   DeleteOutlined,
   CheckCircleOutlined,
+  SyncOutlined,
   UploadOutlined,
   PaperClipOutlined,
   SearchOutlined,
@@ -38,6 +40,11 @@ import {
   CloseOutlined,
   MessageOutlined,
   SendOutlined,
+  UnorderedListOutlined,
+  CalendarOutlined,
+  AppstoreOutlined,
+  SaveOutlined,
+  EditOutlined,
 } from "@ant-design/icons";
 import { DndContext, useDraggable, useDroppable } from "@dnd-kit/core";
 import dayjs from "dayjs";
@@ -163,7 +170,7 @@ const KanbanColumn = ({ id, title, color, children }) => {
   );
 };
 
-// --- ANA BİLEŞEN (viewMode eklendi) ---
+// --- ANA BİLEŞEN ---
 export default function GorevYonetimi({
   aktifKullanici,
   projeler,
@@ -174,6 +181,7 @@ export default function GorevYonetimi({
 }) {
   const [gorevler, setGorevler] = useState([]);
   const [yukleniyor, setYukleniyor] = useState(false);
+  const [formYukleniyor, setFormYukleniyor] = useState(false);
 
   const [aramaMetni, setAramaMetni] = useState("");
   const [filtreDurum, setFiltreDurum] = useState(null);
@@ -181,6 +189,7 @@ export default function GorevYonetimi({
 
   const [modalAcik, setModalAcik] = useState(false);
   const [detayModalAcik, setDetayModalAcik] = useState(false);
+  const [duzenlemeModu, setDuzenlemeModu] = useState(false); // Düzenleme modu state'i
 
   const [seciliGorev, setSeciliGorev] = useState(null);
   const [altGorevler, setAltGorevler] = useState([]);
@@ -189,6 +198,8 @@ export default function GorevYonetimi({
   const [yeniYorum, setYeniYorum] = useState("");
 
   const [form] = Form.useForm();
+  const [detayForm] = Form.useForm();
+
   const YONETICILER = [
     "Genel Müdür",
     "Departman Müdürü",
@@ -214,6 +225,7 @@ export default function GorevYonetimi({
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) setGorevler(data);
+        else setGorevler([]);
         setYukleniyor(false);
       })
       .catch(() => {
@@ -228,10 +240,18 @@ export default function GorevYonetimi({
         title: "Dikkat!",
         content: (
           <div>
-            <p>Bu görev tamamlanmış.</p>
-            <p>Değişiklik yaparsanız 'Bekliyor' durumuna dönecektir.</p>
+            <p>
+              Bu görev daha önce <b>tamamlanmıştır.</b>
+            </p>
+            <p>
+              Değişiklik yaparsanız görev durumu tekrar <b>'Bekliyor'</b> olarak
+              güncellenecektir.
+            </p>
+            <p>Devam etmek istiyor musunuz?</p>
           </div>
         ),
+        okText: "Evet, Güncelle",
+        cancelText: "İptal",
         onOk: () => {
           durumDegistir(seciliGorev.id, "Bekliyor");
           setSeciliGorev({ ...seciliGorev, durum: "Bekliyor" });
@@ -243,19 +263,28 @@ export default function GorevYonetimi({
     }
   };
 
+  // --- GÖREV EKLEME ---
   const formGonder = (degerler) => {
     const formData = new FormData();
     formData.append("baslik", degerler.baslik);
     formData.append("aciklama", degerler.aciklama || "");
     formData.append("oncelik", degerler.oncelik || "Orta");
     formData.append("tekrar_tipi", degerler.tekrar_tipi || "Tek Seferlik");
+
     if (degerler.proje_id) formData.append("proje_id", degerler.proje_id);
-    if (degerler.tarih)
+
+    if (degerler.tarih) {
       formData.append("tarih", degerler.tarih.format("YYYY-MM-DD"));
+    }
+
     formData.append("atananlar", JSON.stringify(degerler.atananlar || []));
     formData.append("gozlemciler", JSON.stringify(degerler.gozlemciler || []));
-    if (degerler.dosya && degerler.dosya.length > 0)
+
+    // ------------------------------------------
+
+    if (degerler.dosya && degerler.dosya.length > 0) {
       formData.append("dosya", degerler.dosya[0].originFileObj);
+    }
 
     fetch(`${API_URL}/gorevler`, { method: "POST", body: formData })
       .then((res) => res.json())
@@ -267,6 +296,55 @@ export default function GorevYonetimi({
       });
   };
 
+  // --- GÖREV GÜNCELLEME (YENİ) ---
+  const gorevGuncelle = async (degerler) => {
+    try {
+      setFormYukleniyor(true);
+      const formData = new FormData();
+      formData.append("baslik", degerler.baslik || seciliGorev.baslik);
+      formData.append("aciklama", degerler.aciklama || "");
+      formData.append("oncelik", degerler.oncelik || "Orta");
+      // Mevcut durumu koru veya güncelle
+      formData.append("durum", seciliGorev.durum);
+
+      if (degerler.proje_id) formData.append("proje_id", degerler.proje_id);
+      if (degerler.tarih) {
+        formData.append("tarih", degerler.tarih.format("YYYY-MM-DD"));
+      }
+
+      formData.append("atananlar", JSON.stringify(degerler.atananlar || []));
+
+      // Yeni dosya varsa ekle
+      if (degerler.dosya && degerler.dosya.length > 0) {
+        formData.append("dosya", degerler.dosya[0].originFileObj);
+      }
+
+      const response = await fetch(`${API_URL}/gorevler/${seciliGorev.id}`, {
+        method: "PUT",
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error("Güncelleme başarısız");
+
+      const guncelGorev = await response.json();
+
+      // State'i güncelle
+      setGorevler((prev) =>
+        prev.map((g) =>
+          g.id === seciliGorev.id ? { ...g, ...guncelGorev } : g
+        )
+      );
+      setSeciliGorev({ ...seciliGorev, ...guncelGorev });
+
+      setDuzenlemeModu(false);
+      message.success("Görev başarıyla güncellendi!");
+    } catch (err) {
+      message.error("Güncelleme hatası: " + err.message);
+    } finally {
+      setFormYukleniyor(false);
+    }
+  };
+
   const durumDegistir = (id, yeniDurum) => {
     fetch(`${API_URL}/gorevler/${id}`, {
       method: "PUT",
@@ -276,6 +354,8 @@ export default function GorevYonetimi({
       setGorevler((prev) =>
         prev.map((g) => (g.id === id ? { ...g, durum: yeniDurum } : g))
       );
+      if (seciliGorev && seciliGorev.id === id)
+        setSeciliGorev((prev) => ({ ...prev, durum: yeniDurum }));
       message.success(`Durum güncellendi: ${yeniDurum}`);
     });
   };
@@ -290,6 +370,17 @@ export default function GorevYonetimi({
   const detayAc = (kayit) => {
     setSeciliGorev(kayit);
     setDetayModalAcik(true);
+    setDuzenlemeModu(false); // Her açılışta okuma modunda başla
+
+    // Formu doldur
+    detayForm.setFieldsValue({
+      ...kayit,
+      tarih: kayit.tarih ? dayjs(kayit.tarih) : null,
+      // AntD Select multiple mode için array olmalı, string gelirse parse et veya olduğu gibi ver
+      atananlar: Array.isArray(kayit.atananlar) ? kayit.atananlar : [],
+      proje_id: kayit.proje_id, // Varsa ID, yoksa null
+    });
+
     fetch(`${API_URL}/gorevler/${kayit.id}/yorumlar`)
       .then((res) => res.json())
       .then((data) => setYorumlar(data));
@@ -313,23 +404,28 @@ export default function GorevYonetimi({
         .then((yeni) => {
           setAltGorevler([...altGorevler, yeni]);
           setYeniAltGorev("");
-          message.success("Eklendi");
+          message.success("Alt adım eklendi");
         });
     });
   };
-  const altGorevToggle = (id, d) => {
+
+  const altGorevToggle = (id, mevcutDurum) => {
     guvenliIslem(() => {
+      const yeniDurum = !mevcutDurum;
       fetch(`${API_URL}/alt-gorevler/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ durum: !d }),
+        body: JSON.stringify({ durum: yeniDurum }),
       }).then(() => {
         setAltGorevler(
-          altGorevler.map((ag) => (ag.id === id ? { ...ag, durum: !d } : ag))
+          altGorevler.map((ag) =>
+            ag.id === id ? { ...ag, durum: yeniDurum } : ag
+          )
         );
       });
     });
   };
+
   const altGorevSil = (id) => {
     guvenliIslem(() => {
       fetch(`${API_URL}/alt-gorevler/${id}`, { method: "DELETE" }).then(() =>
@@ -337,6 +433,7 @@ export default function GorevYonetimi({
       );
     });
   };
+
   const yorumGonder = () => {
     if (!yeniYorum) return;
     guvenliIslem(() => {
@@ -355,31 +452,40 @@ export default function GorevYonetimi({
         });
     });
   };
-  const handleDragEnd = (e) => {
-    const { active, over } = e;
+
+  const handleDragEnd = (event) => {
+    const { active, over } = event;
     if (!over) return;
-    const id = parseInt(active.id);
-    const d = over.id;
-    const g = gorevler.find((x) => x.id === id);
-    if (!g || g.durum === d) return;
-    if (g.durum === "Yapıldı") {
+
+    const gorevId = parseInt(active.id);
+    const yeniDurum = over.id;
+
+    const gorev = gorevler.find((g) => g.id === gorevId);
+    if (!gorev || gorev.durum === yeniDurum) return;
+
+    if (gorev.durum === "Yapıldı") {
       Modal.confirm({
-        title: "Dikkat",
-        content: "Tamamlanmış görevi değiştiriyorsunuz.",
-        onOk: () => durumDegistir(id, d),
+        title: "Dikkat! Tamamlanmış Görev",
+        content:
+          "Bu görev daha önce tamamlanmıştır. Durumunu değiştirmek istediğinize emin misiniz?",
+        okText: "Evet, Değiştir",
+        cancelText: "İptal",
+        onOk: () => durumDegistir(gorevId, yeniDurum),
       });
     } else {
-      durumDegistir(id, d);
+      durumDegistir(gorevId, yeniDurum);
     }
   };
 
   const takvimCellRender = (value, info) => {
     if (info.type !== "date") return info.originNode;
-    const tStr = value.format("YYYY-MM-DD");
-    const bugun = gorevler.filter((g) => g.tarih && g.tarih.startsWith(tStr));
+    const tarihString = value.format("YYYY-MM-DD");
+    const bugunkuIsler = gorevler.filter(
+      (g) => g.tarih && g.tarih.startsWith(tarihString)
+    );
     return (
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-        {bugun.map((item) => (
+        {bugunkuIsler.map((item) => (
           <li key={item.id}>
             <Badge
               status={
@@ -398,11 +504,14 @@ export default function GorevYonetimi({
     );
   };
 
-  const filtrelenmis = gorevler.filter((g) => {
-    const m = g.baslik.toLowerCase().includes(aramaMetni.toLowerCase());
-    const d = filtreDurum ? g.durum === filtreDurum : true;
-    const o = filtreOncelik ? g.oncelik === filtreOncelik : true;
-    return m && d && o;
+  const filtrelenmisGorevler = gorevler.filter((gorev) => {
+    const metinUyumu =
+      gorev.baslik.toLowerCase().includes(aramaMetni.toLowerCase()) ||
+      (gorev.aciklama &&
+        gorev.aciklama.toLowerCase().includes(aramaMetni.toLowerCase()));
+    const durumUyumu = filtreDurum ? gorev.durum === filtreDurum : true;
+    const oncelikUyumu = filtreOncelik ? gorev.oncelik === filtreOncelik : true;
+    return metinUyumu && durumUyumu && oncelikUyumu;
   });
 
   const columns = [
@@ -416,14 +525,17 @@ export default function GorevYonetimi({
       title: "Başlık",
       dataIndex: "baslik",
       render: (t, r) => {
-        const ok =
+        const okunmamisVar =
           bildirimler &&
           bildirimler.some((b) => b.gorev_id === r.id && !b.okundu);
         return (
-          <Badge dot={ok} offset={[5, 0]}>
+          <Badge dot={okunmamisVar} offset={[5, 0]}>
             <a
               onClick={() => detayAc(r)}
-              style={{ fontWeight: ok ? "bold" : "normal", color: "#1890ff" }}
+              style={{
+                fontWeight: "bold",
+                color: "#1890ff",
+              }}
             >
               {t}
             </a>
@@ -436,18 +548,26 @@ export default function GorevYonetimi({
       key: "rolum",
       width: 100,
       render: (_, r) => {
-        if (r.atananlar?.includes(aktifKullanici.ad_soyad))
-          return <Tag color="blue">Sorumlu</Tag>;
-        if (r.gozlemciler?.includes(aktifKullanici.ad_soyad))
-          return <Tag color="gold">Gözlemci</Tag>;
+        const sorumluMu = r.atananlar?.includes(aktifKullanici.ad_soyad);
+        const gozlemciMi = r.gozlemciler?.includes(aktifKullanici.ad_soyad);
+        if (sorumluMu) return <Tag color="blue">Sorumlu</Tag>;
+        if (gozlemciMi) return <Tag color="gold">Gözlemci</Tag>;
         if (yoneticiMi) return <Tag color="purple">Yönetici</Tag>;
-        return "-";
+        return <Tag> - </Tag>;
       },
     },
     {
       title: "Durum",
       dataIndex: "durum",
-      render: (d) => <Tag color={d === "Yapıldı" ? "green" : "blue"}>{d}</Tag>,
+      render: (d) => (
+        <Tag
+          color={
+            d === "Yapıldı" ? "green" : d === "Onay Bekliyor" ? "gold" : "blue"
+          }
+        >
+          {d}
+        </Tag>
+      ),
     },
     {
       title: "Öncelik",
@@ -462,76 +582,99 @@ export default function GorevYonetimi({
         yol ? (
           <PaperClipOutlined style={{ color: "#1890ff", fontSize: 18 }} />
         ) : (
-          "-"
+          <span>-</span>
         ),
     },
     {
       title: "İşlem",
       width: 200,
-      render: (_, r) => (
-        <Space>
-          {r.durum === "Bekliyor" &&
-            r.atananlar?.includes(aktifKullanici.ad_soyad) && (
-              <Button
-                size="small"
-                type="primary"
-                onClick={() => durumDegistir(r.id, "Onay Bekliyor")}
-              >
-                Tamamla
-              </Button>
+      render: (_, r) => {
+        const sorumluMu = r.atananlar?.includes(aktifKullanici.ad_soyad);
+        return (
+          <Space key={`islem-${r.id}`}>
+            {r.durum === "Bekliyor" &&
+              (sorumluMu ? (
+                <Button
+                  type="primary"
+                  size="small"
+                  onClick={() => durumDegistir(r.id, "Onay Bekliyor")}
+                >
+                  Tamamla
+                </Button>
+              ) : (
+                !yoneticiMi && (
+                  <span style={{ color: "#999", fontSize: 11 }}>
+                    İzleme Yetkisi
+                  </span>
+                )
+              ))}
+            {r.durum === "Onay Bekliyor" && (
+              <>
+                {yoneticiMi ? (
+                  <>
+                    <Button
+                      type="primary"
+                      style={{
+                        backgroundColor: "#52c41a",
+                        borderColor: "#52c41a",
+                      }}
+                      size="small"
+                      icon={<CheckCircleOutlined />}
+                      onClick={() => durumDegistir(r.id, "Yapıldı")}
+                    >
+                      Onayla
+                    </Button>
+                    <Button
+                      danger
+                      size="small"
+                      onClick={() => durumDegistir(r.id, "Bekliyor")}
+                    >
+                      Reddet
+                    </Button>
+                  </>
+                ) : (
+                  <span style={{ color: "#999", fontSize: 11 }}>
+                    Yönetici Onayı Bekleniyor
+                  </span>
+                )}
+              </>
             )}
-          {r.durum === "Onay Bekliyor" && yoneticiMi && (
-            <>
+            {r.durum === "Yapıldı" && yoneticiMi && (
               <Button
+                type="default"
                 size="small"
-                type="primary"
-                onClick={() => durumDegistir(r.id, "Yapıldı")}
-              >
-                Onayla
-              </Button>
-              <Button
-                size="small"
-                danger
                 onClick={() => durumDegistir(r.id, "Bekliyor")}
               >
-                Reddet
+                Geri Al
               </Button>
-            </>
-          )}
-          {r.durum === "Yapıldı" && yoneticiMi && (
-            <Button
-              size="small"
-              onClick={() => durumDegistir(r.id, "Bekliyor")}
-            >
-              Geri Al
-            </Button>
-          )}
-          {yoneticiMi && (
-            <Popconfirm title="Sil?" onConfirm={() => sil(r.id)}>
-              <Button size="small" danger icon={<DeleteOutlined />} />
-            </Popconfirm>
-          )}
-        </Space>
-      ),
+            )}
+            {yoneticiMi && (
+              <Popconfirm title="Sil?" onConfirm={() => sil(r.id)}>
+                <Button
+                  type="text"
+                  danger
+                  size="small"
+                  icon={<DeleteOutlined />}
+                />
+              </Popconfirm>
+            )}
+          </Space>
+        );
+      },
     },
   ];
 
   const kanbanData = {
-    Bekliyor: filtrelenmis.filter((g) => g.durum === "Bekliyor"),
-    "Onay Bekliyor": filtrelenmis.filter((g) => g.durum === "Onay Bekliyor"),
-    Yapıldı: filtrelenmis.filter((g) => g.durum === "Yapıldı"),
+    Bekliyor: filtrelenmisGorevler.filter((g) => g.durum === "Bekliyor"),
+    "Onay Bekliyor": filtrelenmisGorevler.filter(
+      (g) => g.durum === "Onay Bekliyor"
+    ),
+    Yapıldı: filtrelenmisGorevler.filter((g) => g.durum === "Yapıldı"),
   };
 
   return (
-    <div
-      style={{
-        background: "#fff",
-        padding: 20,
-        borderRadius: 8,
-        minHeight: "80vh",
-      }}
-    >
-      {/* ÜST ARAÇ ÇUBUĞU (Filtreler ve Yeni Ekle) */}
+    <div>
+      {/* ÜST ARAÇ ÇUBUĞU */}
       {viewMode !== "calendar" && (
         <div
           style={{
@@ -560,6 +703,7 @@ export default function GorevYonetimi({
               value={filtreDurum}
             >
               <Option value="Bekliyor">Bekliyor</Option>
+              <Option value="Onay Bekliyor">Onay Bekliyor</Option>
               <Option value="Yapıldı">Yapıldı</Option>
             </Select>
             <Select
@@ -599,7 +743,7 @@ export default function GorevYonetimi({
       {viewMode === "list" && (
         <Table
           columns={columns}
-          dataSource={filtrelenmis}
+          dataSource={filtrelenmisGorevler}
           rowKey="id"
           loading={yukleniyor}
           pagination={{ pageSize: 10 }}
@@ -642,9 +786,9 @@ export default function GorevYonetimi({
       {/* --- 3. TAKVİM GÖRÜNÜMÜ --- */}
       {viewMode === "calendar" && <Calendar cellRender={takvimCellRender} />}
 
-      {/* --- MODALLAR --- */}
+      {/* --- YENİ İŞ EKLEME MODALI --- */}
       <Modal
-        title="Yeni İş Emri"
+        title="Yeni İş Emri Oluştur"
         open={modalAcik}
         onCancel={() => setModalAcik(false)}
         footer={null}
@@ -660,108 +804,230 @@ export default function GorevYonetimi({
             tekrar_tipi: "Tek Seferlik",
           }}
         >
-          <Form.Item name="proje_id" label="Proje">
-            <Select placeholder="Seçiniz" allowClear>
+          <Form.Item name="proje_id" label="Bağlı Olduğu Proje">
+            <Select placeholder="Bir proje seçin (Opsiyonel)" allowClear>
               {projeler &&
                 projeler.map((p) => (
                   <Option key={p.id} value={p.id}>
-                    {p.ad}
+                    {p.ad} ({p.departman})
                   </Option>
                 ))}
             </Select>
           </Form.Item>
           <Form.Item name="baslik" label="Başlık" rules={[{ required: true }]}>
-            <Input />
+            <Input placeholder="Örn: Sunucu Güncellemesi" />
+          </Form.Item>
+          <Form.Item name="atananlar" label="Sorumlu Personel">
+            <Select
+              mode="multiple"
+              placeholder="Kişi seçin"
+              allowClear
+              disabled={aktifKullanici.rol === "Personel"}
+            >
+              {kullanicilar &&
+                kullanicilar.map((k) => (
+                  <Option key={k.id} value={k.ad_soyad}>
+                    {k.ad_soyad}
+                  </Option>
+                ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="gozlemciler" label="Gözlemciler (Bilgi Sahibi)">
+            <Select mode="multiple" placeholder="Kişi seçin">
+              {kullanicilar &&
+                kullanicilar.map((k) => (
+                  <Option key={k.id} value={k.ad_soyad}>
+                    {k.ad_soyad}
+                  </Option>
+                ))}
+            </Select>
           </Form.Item>
           <div style={{ display: "flex", gap: 10 }}>
-            <Form.Item name="atananlar" label="Sorumlu" style={{ flex: 1 }}>
-              <Select mode="multiple">
-                {kullanicilar &&
-                  kullanicilar.map((k) => (
-                    <Option key={k.id} value={k.ad_soyad}>
-                      {k.ad_soyad}
-                    </Option>
-                  ))}
+            <Form.Item name="oncelik" label="Öncelik" style={{ flex: 1 }}>
+              <Select>
+                <Option value="Orta">Orta</Option>
+                <Option value="Yüksek">Yüksek</Option>
               </Select>
             </Form.Item>
-            <Form.Item name="tarih" label="Tarih" style={{ flex: 1 }}>
+            <Form.Item name="tarih" label="Bitiş Tarihi" style={{ flex: 1 }}>
               <DatePicker style={{ width: "100%" }} />
             </Form.Item>
+            <Form.Item
+              name="tekrar_tipi"
+              label="Tekrar Durumu"
+              style={{ flex: 1 }}
+            >
+              <Select>
+                <Option value="Tek Seferlik">Tek Seferlik</Option>
+                <Option value="Günlük">Günlük</Option>
+                <Option value="Haftalık">Haftalık</Option>
+              </Select>
+            </Form.Item>
           </div>
-          <Button type="primary" htmlType="submit" block>
+          <Form.Item
+            name="dosyalar" // İsim değişti: dosya -> dosyalar
+            label="Ek Dosyalar"
+            valuePropName="fileList"
+            getValueFromEvent={(e) => (Array.isArray(e) ? e : e && e.fileList)}
+          >
+            <Upload
+              beforeUpload={() => false}
+              listType="picture"
+              multiple={true} // <-- BU ARTIK TRUE
+              maxCount={10} // 10 dosyaya kadar izin ver
+            >
+              <Button icon={<UploadOutlined />}>Dosyaları Seç (Çoklu)</Button>
+            </Upload>
+          </Form.Item>
+
+          <Button type="primary" htmlType="submit" block size="large">
             Kaydet
           </Button>
         </Form>
       </Modal>
 
+      {/* --- DETAY MODALI (DEV PENCERE - DÜZENLENEBİLİR!) --- */}
       <Modal
         open={detayModalAcik}
         onCancel={() => setDetayModalAcik(false)}
         footer={null}
         width={900}
+        title={
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              paddingRight: 30,
+            }}
+          >
+            {duzenlemeModu ? (
+              <Input
+                defaultValue={seciliGorev?.baslik}
+                onChange={(e) => {
+                  // Basit başlık değişimi için formu güncellemeye gerek yok, kaydederken formdan alır
+                }}
+              />
+            ) : (
+              <span style={{ fontSize: 18 }}>{seciliGorev?.baslik}</span>
+            )}
+            <Space>
+              <Button
+                type={duzenlemeModu ? "primary" : "default"}
+                icon={duzenlemeModu ? <SaveOutlined /> : <EditOutlined />}
+                onClick={() => setDuzenlemeModu(!duzenlemeModu)}
+              >
+                {duzenlemeModu ? "Vazgeç" : "Düzenle"}
+              </Button>
+              <Tag color={seciliGorev?.durum === "Yapıldı" ? "green" : "blue"}>
+                {seciliGorev?.durum}
+              </Tag>
+            </Space>
+          </div>
+        }
       >
-        {/* Detay İçeriği (Kısaltıldı, önceki kodunuzdaki detay içeriği buraya gelecek. Eğer isterseniz tam halini veririm ama dosya çok uzuyor.) */}
-        {/* Buraya kopyala-yapıştır ile eski detay içeriğini koyabilirsiniz veya ben size tam halini verebilirim */}
         {seciliGorev && (
           <Row gutter={24}>
             <Col span={14} style={{ borderRight: "1px solid #f0f0f0" }}>
-              <div style={{ marginBottom: 20 }}>
-                <Text type="secondary">
-                  <ProjectOutlined /> Proje:
-                </Text>{" "}
-                <strong style={{ color: "#1890ff" }}>
-                  {seciliGorev.proje_adi || "Genel"}
-                </strong>
-                <Divider type="vertical" />
-                <Text type="secondary">
-                  <ClockCircleOutlined /> Tekrar:
-                </Text>{" "}
-                <strong>{seciliGorev.tekrar_tipi || "Tek Seferlik"}</strong>
-              </div>
-              <div
-                style={{
-                  background: "#fafafa",
-                  padding: 15,
-                  borderRadius: 8,
-                  marginBottom: 20,
-                }}
+              <Form
+                form={detayForm}
+                layout="vertical"
+                initialValues={seciliGorev}
+                disabled={!duzenlemeModu}
               >
-                <Text type="secondary">Açıklama:</Text>
-                <p>{seciliGorev.aciklama || "Açıklama girilmemiş."}</p>
+                <div style={{ marginBottom: 20 }}>
+                  <Text type="secondary">
+                    <ProjectOutlined /> Proje:
+                  </Text>{" "}
+                  <strong style={{ color: "#1890ff" }}>
+                    {seciliGorev.proje_adi || "Genel"}
+                  </strong>
+                  <Divider type="vertical" />
+                  <Form.Item
+                    name="tekrar_tipi"
+                    label="Tekrar"
+                    style={{ display: "inline-block", margin: 0, width: 150 }}
+                  >
+                    <Select size="small">
+                      <Option value="Tek Seferlik">Tek Seferlik</Option>
+                      <Option value="Günlük">Günlük</Option>
+                    </Select>
+                  </Form.Item>
+                </div>
+
+                <Form.Item name="aciklama" label="Açıklama">
+                  <Input.TextArea rows={3} />
+                </Form.Item>
+
                 <Row gutter={16}>
                   <Col span={12}>
-                    <Text type="secondary">Sorumlular:</Text>
-                    <br />
-                    {seciliGorev.atananlar?.map((k) => (
-                      <Tag key={k} color="purple">
-                        {k}
-                      </Tag>
-                    )) || "-"}
+                    <Form.Item name="atananlar" label="Sorumlu">
+                      <Select mode="multiple">
+                        {kullanicilar?.map((k) => (
+                          <Option key={k.id} value={k.ad_soyad}>
+                            {k.ad_soyad}
+                          </Option>
+                        ))}
+                      </Select>
+                    </Form.Item>
                   </Col>
                   <Col span={12}>
-                    <Text type="secondary">Bitiş Tarihi:</Text>
-                    <br />
-                    <strong>
-                      {seciliGorev.tarih
-                        ? dayjs(seciliGorev.tarih).format("DD.MM.YYYY")
-                        : "-"}
-                    </strong>
+                    <Form.Item name="tarih" label="Bitiş Tarihi">
+                      <DatePicker style={{ width: "100%" }} />
+                    </Form.Item>
                   </Col>
                 </Row>
-                {seciliGorev.dosya_yolu && (
-                  <div style={{ marginTop: 15 }}>
-                    <Button
-                      type="dashed"
-                      block
-                      icon={<PaperClipOutlined />}
-                      href={`${API_URL}/uploads/${seciliGorev.dosya_yolu}`}
-                      target="_blank"
+
+                {duzenlemeModu && (
+                  <>
+                    <Form.Item
+                      name="dosya"
+                      label="Dosya Değiştir"
+                      valuePropName="fileList"
+                      getValueFromEvent={(e) =>
+                        Array.isArray(e) ? e : e && e.fileList
+                      }
                     >
-                      Ekli Dosyayı Görüntüle
+                      <Upload
+                        maxCount={1}
+                        beforeUpload={() => false}
+                        listType="picture"
+                      >
+                        <Button icon={<UploadOutlined />}>
+                          Yeni Dosya Seç
+                        </Button>
+                      </Upload>
+                    </Form.Item>
+                    <Button
+                      type="primary"
+                      block
+                      icon={<SaveOutlined />}
+                      loading={formYukleniyor}
+                      onClick={() => gorevGuncelle(detayForm.getFieldsValue())}
+                    >
+                      Değişiklikleri Kaydet
                     </Button>
-                  </div>
+                  </>
                 )}
-              </div>
+              </Form>
+
+              {!duzenlemeModu && seciliGorev.dosya_yolu && (
+                <div style={{ marginTop: 15 }}>
+                  <Button
+                    type="dashed"
+                    block
+                    icon={<PaperClipOutlined />}
+                    href={`${API_URL}/uploads/${seciliGorev.dosya_yolu}`}
+                    target="_blank"
+                  >
+                    Ekli Dosyayı Görüntüle
+                  </Button>
+                </div>
+              )}
+
+              <Divider />
+
+              {/* ALT GÖREVLER */}
               <div
                 style={{
                   marginBottom: 10,
@@ -771,7 +1037,7 @@ export default function GorevYonetimi({
                 }}
               >
                 <Title level={5} style={{ margin: 0 }}>
-                  <CheckSquareOutlined /> Alt Görevler / İş Listesi
+                  <CheckSquareOutlined /> Alt Görevler
                 </Title>
                 <span style={{ color: "#999", fontSize: 12 }}>
                   {Math.round(
@@ -820,33 +1086,24 @@ export default function GorevYonetimi({
                         {item.baslik}
                       </span>
                     </Checkbox>
-                    <span
-                      style={{
-                        fontSize: 10,
-                        color: "#ccc",
-                        marginLeft: "auto",
-                      }}
-                    >
-                      {item.olusturan}
-                    </span>
                   </List.Item>
                 )}
               />
-              {(yoneticiMi ||
-                seciliGorev.atananlar?.includes(aktifKullanici.ad_soyad)) && (
-                <Space.Compact style={{ width: "100%", marginTop: 10 }}>
-                  <Input
-                    placeholder="Yeni alt adım ekle"
-                    value={yeniAltGorev}
-                    onChange={(e) => setYeniAltGorev(e.target.value)}
-                    onPressEnter={altGorevEkle}
-                  />
-                  <Button type="primary" onClick={altGorevEkle}>
-                    Ekle
-                  </Button>
-                </Space.Compact>
-              )}
+
+              {/* YENİ ALT GÖREV EKLEME */}
+              <Space.Compact style={{ width: "100%", marginTop: 10 }}>
+                <Input
+                  placeholder="Yeni alt adım ekle"
+                  value={yeniAltGorev}
+                  onChange={(e) => setYeniAltGorev(e.target.value)}
+                  onPressEnter={altGorevEkle}
+                />
+                <Button type="primary" onClick={altGorevEkle}>
+                  Ekle
+                </Button>
+              </Space.Compact>
             </Col>
+
             <Col span={10}>
               <Title level={5}>
                 <MessageOutlined /> İş Sohbeti
@@ -866,7 +1123,7 @@ export default function GorevYonetimi({
                   itemLayout="horizontal"
                   dataSource={yorumlar}
                   renderItem={(item) => (
-                    <List.Item>
+                    <List.Item key={item.id}>
                       <List.Item.Meta
                         avatar={
                           <Avatar style={{ backgroundColor: "#1890ff" }}>
@@ -891,17 +1148,6 @@ export default function GorevYonetimi({
                     </List.Item>
                   )}
                 />
-                {yorumlar.length === 0 && (
-                  <div
-                    style={{
-                      textAlign: "center",
-                      color: "#ccc",
-                      marginTop: 50,
-                    }}
-                  >
-                    Henüz mesaj yok.
-                  </div>
-                )}
               </div>
               <div style={{ marginTop: 10 }}>
                 <Mentions
