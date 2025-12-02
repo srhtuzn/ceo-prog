@@ -4,7 +4,7 @@ import SatinAlma from "./SatinAlma";
 import IzinYonetimi from "./IzinYonetimi";
 import EkipYonetimi from "./EkipYonetimi";
 import AdminDashboard from "./AdminDashboard";
-import GorevYonetimi from "./GorevYonetimi"; // <-- GÖREVLER BURADAN GELİYOR
+import GorevYonetimi from "./GorevYonetimi";
 import DosyaYoneticisi from "./DosyaYoneticisi";
 import ProfilYonetimi from "./ProfilYonetimi";
 import {
@@ -17,11 +17,11 @@ import {
   DollarOutlined,
   TeamOutlined,
   UsergroupAddOutlined,
-  ProjectOutlined,
-  AppstoreOutlined, // <-- Pano ikonu
-  MenuUnfoldOutlined, // <-- Menü açma
-  MenuFoldOutlined, // <-- Menü kapama
+  AppstoreOutlined,
+  MenuUnfoldOutlined,
+  MenuFoldOutlined,
   FolderOpenOutlined,
+  PlusCircleOutlined, // <-- YENİ İKON
 } from "@ant-design/icons";
 import {
   Layout,
@@ -53,7 +53,7 @@ function App() {
   const [aktifKullanici, setAktifKullanici] = useState(
     JSON.parse(localStorage.getItem("wf_user")) || null
   );
-  const [collapsed, setCollapsed] = useState(false); // Menü daraltma durumu
+  const [collapsed, setCollapsed] = useState(false);
 
   const cikisYap = () => {
     localStorage.removeItem("wf_user");
@@ -65,7 +65,6 @@ function App() {
     localStorage.setItem("wf_user", JSON.stringify(yeniKullanici));
   };
 
-  // --- STATE'LER ---
   const [sayfa, setSayfa] = useState("dashboard");
   const [projeler, setProjeler] = useState([]);
   const [kullanicilar, setKullanicilar] = useState([]);
@@ -73,10 +72,7 @@ function App() {
   const [okunmamisSayisi, setOkunmamisSayisi] = useState(0);
   const [bildirimAcik, setBildirimAcik] = useState(false);
 
-  // Bildirimden gelen görevi açmak için ID
   const [hedefGorevId, setHedefGorevId] = useState(null);
-
-  // Sadece Proje ve Profil Modalları burada kaldı (Görev modalları GorevYonetimi'ne gitti)
   const [projeModalAcik, setProjeModalAcik] = useState(false);
   const [profilModalAcik, setProfilModalAcik] = useState(false);
 
@@ -88,11 +84,8 @@ function App() {
   ];
   const yoneticiMi = YONETICILER.includes(aktifKullanici?.rol);
 
-  // --- MENÜ YAPISI (GÜNCELLENDİ: Alt Menülü) ---
   const menuItems = [
     { key: "dashboard", icon: <DesktopOutlined />, label: "Ana Sayfa" },
-
-    // GÖREVLER (Alt Menü)
     {
       key: "gorevler",
       icon: <AppstoreOutlined />,
@@ -107,7 +100,6 @@ function App() {
         { key: "calendar", label: "Takvim", icon: <CalendarOutlined /> },
       ],
     },
-
     {
       key: "satinalma",
       icon: <DollarOutlined />,
@@ -154,16 +146,17 @@ function App() {
   }, [aktifKullanici]);
 
   const projeCek = () =>
-    fetch(`${API_URL}/projeler`)
+    fetch(`${API_URL}/gorevler/projeler`)
       .then((res) => res.json())
       .then((data) => setProjeler(data));
+
   const kullaniciCek = () =>
-    fetch(`${API_URL}/kullanicilar`)
+    fetch(`${API_URL}/ik/kullanicilar`)
       .then((res) => res.json())
       .then((data) => setKullanicilar(data));
 
   const bildirimCek = () => {
-    fetch(`${API_URL}/bildirimler`)
+    fetch(`${API_URL}/dashboard/bildirimler?kime=${aktifKullanici.ad_soyad}`)
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) {
@@ -172,8 +165,12 @@ function App() {
         }
       });
   };
+
   const bildirimleriOkunduYap = () =>
-    fetch(`${API_URL}/bildirimler/hepsini-oku`, { method: "PUT" }).then(() => {
+    fetch(
+      `${API_URL}/dashboard/bildirimler/hepsini-oku?kime=${aktifKullanici.ad_soyad}`,
+      { method: "PUT" }
+    ).then(() => {
       setOkunmamisSayisi(0);
       bildirimCek();
     });
@@ -189,7 +186,8 @@ function App() {
         ? degerler.tarih[1].format("YYYY-MM-DD")
         : null,
     };
-    fetch(`${API_URL}/projeler`, {
+
+    fetch(`${API_URL}/gorevler/projeler`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -206,7 +204,7 @@ function App() {
     setBildirimAcik(false);
     if (bildirim.gorev_id) {
       setHedefGorevId(bildirim.gorev_id);
-      setSayfa("list"); // Detay açmak için listeye gönderiyoruz
+      setSayfa("list");
     } else {
       message.info(bildirim.mesaj);
     }
@@ -252,7 +250,6 @@ function App() {
       </Sider>
 
       <Layout className="site-layout">
-        {/* KOMPAKT HEADER */}
         <Header
           style={{
             padding: "0 20px",
@@ -265,7 +262,6 @@ function App() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 15 }}>
-            {/* Menü Aç/Kapa Butonu */}
             <Button
               type="text"
               icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
@@ -287,6 +283,19 @@ function App() {
           </div>
 
           <Space>
+            {/* --- YENİ PROJE EKLEME BUTONU (Sadece Yöneticiler) --- */}
+            {yoneticiMi && (
+              <Button
+                type="primary"
+                icon={<PlusCircleOutlined />}
+                style={{ backgroundColor: "#52c41a", borderColor: "#52c41a" }}
+                onClick={() => setProjeModalAcik(true)}
+              >
+                Yeni Proje
+              </Button>
+            )}
+            {/* --------------------------------------------------- */}
+
             <Popover
               content={
                 <List
@@ -377,8 +386,6 @@ function App() {
               </div>
             ))}
 
-          {/* --- GÖREV YÖNETİMİ (LİSTE, PANO VEYA TAKVİM MODUNDA) --- */}
-          {/* viewMode prop'u ile hangi görünümün açılacağını söylüyoruz */}
           {(sayfa === "list" || sayfa === "board" || sayfa === "calendar") && (
             <GorevYonetimi
               aktifKullanici={aktifKullanici}
@@ -386,7 +393,7 @@ function App() {
               kullanicilar={kullanicilar}
               bildirimler={bildirimler}
               acilacakGorevId={hedefGorevId}
-              viewMode={sayfa} // <-- KRİTİK NOKTA: GÖRÜNÜM MODUNU GÖNDERİYORUZ
+              viewMode={sayfa}
             />
           )}
           {sayfa === "drive" && (
@@ -403,7 +410,6 @@ function App() {
         </Content>
       </Layout>
 
-      {/* --- ORTAK MODALLAR --- */}
       <Modal
         title="Yeni Proje Başlat"
         open={projeModalAcik}
@@ -422,6 +428,9 @@ function App() {
             <Select>
               <Option value="Bilgi İşlem">Bilgi İşlem</Option>
               <Option value="Muhasebe">Muhasebe</Option>
+              <Option value="Satış">Satış</Option>
+              <Option value="Yönetim">Yönetim</Option>
+              <Option value="İK">İnsan Kaynakları</Option>
             </Select>
           </Form.Item>
           <Form.Item name="tarih" label="Süre">
@@ -433,7 +442,6 @@ function App() {
         </Form>
       </Modal>
 
-      {/* --- PROFİL MODÜLÜ (YENİ DOSYADAN) --- */}
       <ProfilYonetimi
         acik={profilModalAcik}
         kapat={() => setProfilModalAcik(false)}

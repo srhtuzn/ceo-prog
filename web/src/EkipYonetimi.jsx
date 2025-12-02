@@ -21,14 +21,14 @@ import {
   Badge,
 } from "antd";
 import {
-  UserOutlined,
   EditOutlined,
   ApartmentOutlined,
   UnorderedListOutlined,
   UserDeleteOutlined,
   TeamOutlined,
   IdcardOutlined,
-  DeleteOutlined, // <-- EKSİK OLAN İKON EKLENDİ
+  DeleteOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 
 const { Text } = Typography;
@@ -53,7 +53,6 @@ export default function EkipYonetimi({ aktifKullanici }) {
 
   const [form] = Form.useForm();
 
-  // Güvenlik: Sadece belirli roller düzenleme yapabilir
   const yetkiliMi =
     YETKILI_ROLLER.includes(aktifKullanici?.rol) ||
     aktifKullanici?.departman === "Yönetim";
@@ -64,7 +63,8 @@ export default function EkipYonetimi({ aktifKullanici }) {
 
   const veriCek = () => {
     setYukleniyor(true);
-    fetch(`${API_URL}/kullanicilar`)
+    // YENİ ADRES: /kullanicilar -> /ik/kullanicilar
+    fetch(`${API_URL}/ik/kullanicilar`)
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) setKullanicilar(data);
@@ -74,7 +74,8 @@ export default function EkipYonetimi({ aktifKullanici }) {
 
   // --- İŞLEMLER ---
   const yoneticiKaydet = () => {
-    fetch(`${API_URL}/kullanicilar/yonetici-ata/${seciliPersonel.id}`, {
+    // YENİ ADRES
+    fetch(`${API_URL}/ik/kullanicilar/yonetici-ata/${seciliPersonel.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ yonetici_id: yeniYonetici }),
@@ -91,7 +92,8 @@ export default function EkipYonetimi({ aktifKullanici }) {
   };
 
   const yoneticiSil = (personelId) => {
-    fetch(`${API_URL}/kullanicilar/yonetici-sil/${personelId}`, {
+    // YENİ ADRES
+    fetch(`${API_URL}/ik/kullanicilar/yonetici-sil/${personelId}`, {
       method: "PUT",
     }).then(() => {
       message.success("Bağlantı kaldırıldı");
@@ -100,14 +102,16 @@ export default function EkipYonetimi({ aktifKullanici }) {
   };
 
   const kullaniciSil = (id) => {
-    fetch(`${API_URL}/kullanicilar/${id}`, { method: "DELETE" }).then(() => {
+    // YENİ ADRES
+    fetch(`${API_URL}/ik/kullanicilar/${id}`, { method: "DELETE" }).then(() => {
       message.success("Personel silindi");
       veriCek();
     });
   };
 
   const kullaniciGuncelle = (values) => {
-    fetch(`${API_URL}/kullanicilar/${seciliPersonel.id}`, {
+    // YENİ ADRES
+    fetch(`${API_URL}/ik/kullanicilar/${seciliPersonel.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(values),
@@ -118,7 +122,6 @@ export default function EkipYonetimi({ aktifKullanici }) {
     });
   };
 
-  // --- MODAL AÇICILAR ---
   const yoneticiModalAc = (personel) => {
     setSeciliPersonel(personel);
     setYeniYonetici(personel.yonetici_id);
@@ -128,11 +131,9 @@ export default function EkipYonetimi({ aktifKullanici }) {
   const duzenleModalAc = (personel) => {
     setSeciliPersonel(personel);
     setDuzenleModalAcik(true);
-    // Formu bu kişinin bilgileriyle doldur
     setTimeout(() => form.setFieldsValue(personel), 100);
   };
 
-  // --- TABLO KOLONLARI ---
   const columns = [
     {
       title: "Personel",
@@ -323,7 +324,6 @@ export default function EkipYonetimi({ aktifKullanici }) {
         />
       </Card>
 
-      {/* --- YÖNETİCİ ATAMA PENCERESİ --- */}
       <Modal
         title="Yönetici Ata"
         open={yoneticiModalAcik}
@@ -353,7 +353,6 @@ export default function EkipYonetimi({ aktifKullanici }) {
         </Select>
       </Modal>
 
-      {/* --- PERSONEL DÜZENLEME PENCERESİ (YENİ) --- */}
       <Modal
         title="Personel Bilgilerini Düzenle"
         open={duzenleModalAcik}
@@ -396,8 +395,6 @@ export default function EkipYonetimi({ aktifKullanici }) {
                 <Input />
               </Form.Item>
             </Col>
-
-            {/* YÖNETİCİLERE ÖZEL ALANLAR */}
             <Col span={12}>
               <Form.Item name="rol" label="Sistem Rolü">
                 <Select>

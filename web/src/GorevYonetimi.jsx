@@ -29,20 +29,15 @@ import {
   PlusOutlined,
   DeleteOutlined,
   CheckCircleOutlined,
-  SyncOutlined,
   UploadOutlined,
   PaperClipOutlined,
   SearchOutlined,
   FilterOutlined,
   ProjectOutlined,
-  ClockCircleOutlined,
   CheckSquareOutlined,
   CloseOutlined,
   MessageOutlined,
   SendOutlined,
-  UnorderedListOutlined,
-  CalendarOutlined,
-  AppstoreOutlined,
   SaveOutlined,
   EditOutlined,
 } from "@ant-design/icons";
@@ -55,11 +50,10 @@ const API_URL = "http://localhost:3000";
 
 // --- KANBAN BİLEŞENLERİ ---
 const KanbanCard = ({ gorev, onClick }) => {
-  const { attributes, listeners, setNodeRef, transform, isDragging } =
-    useDraggable({
-      id: gorev.id.toString(),
-      data: { gorev },
-    });
+  const { attributes, listeners, setNodeRef, transform } = useDraggable({
+    id: gorev.id.toString(),
+    data: { gorev },
+  });
 
   const style = transform
     ? {
@@ -189,7 +183,7 @@ export default function GorevYonetimi({
 
   const [modalAcik, setModalAcik] = useState(false);
   const [detayModalAcik, setDetayModalAcik] = useState(false);
-  const [duzenlemeModu, setDuzenlemeModu] = useState(false); // Düzenleme modu state'i
+  const [duzenlemeModu, setDuzenlemeModu] = useState(false);
 
   const [seciliGorev, setSeciliGorev] = useState(null);
   const [altGorevler, setAltGorevler] = useState([]);
@@ -263,7 +257,6 @@ export default function GorevYonetimi({
     }
   };
 
-  // --- GÖREV EKLEME ---
   const formGonder = (degerler) => {
     const formData = new FormData();
     formData.append("baslik", degerler.baslik);
@@ -280,8 +273,6 @@ export default function GorevYonetimi({
     formData.append("atananlar", JSON.stringify(degerler.atananlar || []));
     formData.append("gozlemciler", JSON.stringify(degerler.gozlemciler || []));
 
-    // ------------------------------------------
-
     if (degerler.dosya && degerler.dosya.length > 0) {
       formData.append("dosya", degerler.dosya[0].originFileObj);
     }
@@ -296,7 +287,6 @@ export default function GorevYonetimi({
       });
   };
 
-  // --- GÖREV GÜNCELLEME (YENİ) ---
   const gorevGuncelle = async (degerler) => {
     try {
       setFormYukleniyor(true);
@@ -304,7 +294,6 @@ export default function GorevYonetimi({
       formData.append("baslik", degerler.baslik || seciliGorev.baslik);
       formData.append("aciklama", degerler.aciklama || "");
       formData.append("oncelik", degerler.oncelik || "Orta");
-      // Mevcut durumu koru veya güncelle
       formData.append("durum", seciliGorev.durum);
 
       if (degerler.proje_id) formData.append("proje_id", degerler.proje_id);
@@ -314,7 +303,6 @@ export default function GorevYonetimi({
 
       formData.append("atananlar", JSON.stringify(degerler.atananlar || []));
 
-      // Yeni dosya varsa ekle
       if (degerler.dosya && degerler.dosya.length > 0) {
         formData.append("dosya", degerler.dosya[0].originFileObj);
       }
@@ -328,7 +316,6 @@ export default function GorevYonetimi({
 
       const guncelGorev = await response.json();
 
-      // State'i güncelle
       setGorevler((prev) =>
         prev.map((g) =>
           g.id === seciliGorev.id ? { ...g, ...guncelGorev } : g
@@ -370,15 +357,13 @@ export default function GorevYonetimi({
   const detayAc = (kayit) => {
     setSeciliGorev(kayit);
     setDetayModalAcik(true);
-    setDuzenlemeModu(false); // Her açılışta okuma modunda başla
+    setDuzenlemeModu(false);
 
-    // Formu doldur
     detayForm.setFieldsValue({
       ...kayit,
       tarih: kayit.tarih ? dayjs(kayit.tarih) : null,
-      // AntD Select multiple mode için array olmalı, string gelirse parse et veya olduğu gibi ver
       atananlar: Array.isArray(kayit.atananlar) ? kayit.atananlar : [],
-      proje_id: kayit.proje_id, // Varsa ID, yoksa null
+      proje_id: kayit.proje_id,
     });
 
     fetch(`${API_URL}/gorevler/${kayit.id}/yorumlar`)
@@ -412,7 +397,7 @@ export default function GorevYonetimi({
   const altGorevToggle = (id, mevcutDurum) => {
     guvenliIslem(() => {
       const yeniDurum = !mevcutDurum;
-      fetch(`${API_URL}/alt-gorevler/${id}`, {
+      fetch(`${API_URL}/gorevler/alt-gorevler/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ durum: yeniDurum }),
@@ -428,9 +413,9 @@ export default function GorevYonetimi({
 
   const altGorevSil = (id) => {
     guvenliIslem(() => {
-      fetch(`${API_URL}/alt-gorevler/${id}`, { method: "DELETE" }).then(() =>
-        setAltGorevler(altGorevler.filter((ag) => ag.id !== id))
-      );
+      fetch(`${API_URL}/gorevler/alt-gorevler/${id}`, {
+        method: "DELETE",
+      }).then(() => setAltGorevler(altGorevler.filter((ag) => ag.id !== id)));
     });
   };
 
@@ -532,10 +517,7 @@ export default function GorevYonetimi({
           <Badge dot={okunmamisVar} offset={[5, 0]}>
             <a
               onClick={() => detayAc(r)}
-              style={{
-                fontWeight: "bold",
-                color: "#1890ff",
-              }}
+              style={{ fontWeight: "bold", color: "#1890ff" }}
             >
               {t}
             </a>
@@ -814,6 +796,7 @@ export default function GorevYonetimi({
                 ))}
             </Select>
           </Form.Item>
+
           <Form.Item name="baslik" label="Başlık" rules={[{ required: true }]}>
             <Input placeholder="Örn: Sunucu Güncellemesi" />
           </Form.Item>
@@ -865,7 +848,7 @@ export default function GorevYonetimi({
             </Form.Item>
           </div>
           <Form.Item
-            name="dosyalar" // İsim değişti: dosya -> dosyalar
+            name="dosyalar"
             label="Ek Dosyalar"
             valuePropName="fileList"
             getValueFromEvent={(e) => (Array.isArray(e) ? e : e && e.fileList)}
@@ -873,20 +856,19 @@ export default function GorevYonetimi({
             <Upload
               beforeUpload={() => false}
               listType="picture"
-              multiple={true} // <-- BU ARTIK TRUE
-              maxCount={10} // 10 dosyaya kadar izin ver
+              multiple={true}
+              maxCount={10}
             >
               <Button icon={<UploadOutlined />}>Dosyaları Seç (Çoklu)</Button>
             </Upload>
           </Form.Item>
-
           <Button type="primary" htmlType="submit" block size="large">
             Kaydet
           </Button>
         </Form>
       </Modal>
 
-      {/* --- DETAY MODALI (DEV PENCERE - DÜZENLENEBİLİR!) --- */}
+      {/* --- DETAY MODALI --- */}
       <Modal
         open={detayModalAcik}
         onCancel={() => setDetayModalAcik(false)}
@@ -902,12 +884,7 @@ export default function GorevYonetimi({
             }}
           >
             {duzenlemeModu ? (
-              <Input
-                defaultValue={seciliGorev?.baslik}
-                onChange={(e) => {
-                  // Basit başlık değişimi için formu güncellemeye gerek yok, kaydederken formdan alır
-                }}
-              />
+              <Input defaultValue={seciliGorev?.baslik} onChange={(e) => {}} />
             ) : (
               <span style={{ fontSize: 18 }}>{seciliGorev?.baslik}</span>
             )}
@@ -1090,7 +1067,6 @@ export default function GorevYonetimi({
                 )}
               />
 
-              {/* YENİ ALT GÖREV EKLEME */}
               <Space.Compact style={{ width: "100%", marginTop: 10 }}>
                 <Input
                   placeholder="Yeni alt adım ekle"

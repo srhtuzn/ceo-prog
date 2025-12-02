@@ -48,8 +48,8 @@ export default function SatinAlma({ aktifKullanici }) {
 
   const veriCek = () => {
     setYukleniyor(true);
-    // GÜNCELLEME: userId parametresi eklendi
-    fetch(`${API_URL}/satin-alma?userId=${aktifKullanici.id}`)
+    // YENİ ADRES: /satin-alma yerine /finans
+    fetch(`${API_URL}/finans?userId=${aktifKullanici.id}`)
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) setTalepler(data);
@@ -63,7 +63,8 @@ export default function SatinAlma({ aktifKullanici }) {
   };
 
   const projeCek = () => {
-    fetch(`${API_URL}/projeler`)
+    // YENİ ADRES: /projeler yerine /gorevler/projeler
+    fetch(`${API_URL}/gorevler/projeler`)
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) setProjeler(data);
@@ -96,7 +97,8 @@ export default function SatinAlma({ aktifKullanici }) {
       formData.append("dosya", degerler.dosya[0].originFileObj);
     }
 
-    fetch(`${API_URL}/satin-alma`, { method: "POST", body: formData })
+    // YENİ ADRES
+    fetch(`${API_URL}/finans`, { method: "POST", body: formData })
       .then((res) => res.json())
       .then(() => {
         message.success("Talep oluşturuldu");
@@ -109,7 +111,8 @@ export default function SatinAlma({ aktifKullanici }) {
 
   const onaylaReddet = (id, islem) => {
     const rol = aktifKullanici?.rol || "";
-    fetch(`${API_URL}/satin-alma/onay/${id}`, {
+    // YENİ ADRES
+    fetch(`${API_URL}/finans/onay/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ onaylayan_rol: rol, islem: islem }),
@@ -318,10 +321,7 @@ export default function SatinAlma({ aktifKullanici }) {
               style={{ flex: 1 }}
               initialValue={aktifKullanici.departman}
             >
-              <Select
-                // GÜNCELLEME: GENEL MÜDÜR DEĞİLSE KİLİTLE
-                disabled={!aktifKullanici.rol.includes("Genel Müdür")}
-              >
+              <Select disabled={!aktifKullanici.rol.includes("Genel Müdür")}>
                 <Option value="Bilgi İşlem">Bilgi İşlem</Option>
                 <Option value="Muhasebe">Muhasebe</Option>
                 <Option value="Satış">Satış</Option>

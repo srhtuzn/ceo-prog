@@ -9,7 +9,7 @@ import {
   Tag,
   Table,
   Modal,
-  Space, // <-- BU EKSİKTİ
+  Space,
   Button,
   message,
 } from "antd";
@@ -22,22 +22,9 @@ import {
   CheckCircleOutlined,
   UserAddOutlined,
 } from "@ant-design/icons";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  Legend,
-} from "recharts";
 import dayjs from "dayjs";
 
 const API_URL = "http://localhost:3000";
-const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042"];
 
 export default function AdminDashboard() {
   const [veri, setVeri] = useState(null);
@@ -54,19 +41,21 @@ export default function AdminDashboard() {
   const [finansDetay, setFinansDetay] = useState([]);
   const [izinDetay, setIzinDetay] = useState([]);
 
-  // KULLANICIYI HAFIZADAN AL (Hata Buradaydı: Kimliksiz istek atıyorduk)
+  // KULLANICIYI HAFIZADAN AL
   const aktifKullanici = JSON.parse(localStorage.getItem("wf_user"));
 
   useEffect(() => {
     fetch(`${API_URL}/dashboard/ozet`)
       .then((res) => res.json())
       .then((data) => setVeri(data));
+
+    bekleyenleriCek();
   }, []);
 
-  // 1. FİNANS DETAYI (DÜZELTİLDİ: Kimlik Eklendi)
+  // 1. FİNANS DETAYI (DÜZELTİLDİ: URL Güncellendi)
   const finansDetayGoster = () => {
-    // userId ekledik
-    fetch(`${API_URL}/satin-alma?userId=${aktifKullanici.id}`)
+    // ESKİ: /satin-alma -> YENİ: /finans
+    fetch(`${API_URL}/finans?userId=${aktifKullanici.id}`)
       .then((res) => res.json())
       .then((data) => {
         const bekleyenler = data.filter((d) => d.durum.includes("Bekliyor"));
@@ -75,10 +64,10 @@ export default function AdminDashboard() {
       });
   };
 
-  // 2. İZİN DETAYI (DÜZELTİLDİ: Kimlik Eklendi)
+  // 2. İZİN DETAYI (DÜZELTİLDİ: URL Güncellendi)
   const izinDetayGoster = () => {
-    // userId ekledik. Yönetici olduğumuz için herkesi göreceğiz.
-    fetch(`${API_URL}/izinler?userId=${aktifKullanici.id}`)
+    // ESKİ: /izinler -> YENİ: /ik/izinler
+    fetch(`${API_URL}/ik/izinler?userId=${aktifKullanici.id}`)
       .then((res) => res.json())
       .then((data) => {
         const bugun = dayjs().format("YYYY-MM-DD");
@@ -94,9 +83,11 @@ export default function AdminDashboard() {
         setIzinModal(true);
       });
   };
-  // Bekleyen personelleri çek
+
+  // Bekleyen personelleri çek (DÜZELTİLDİ: URL Güncellendi)
   const bekleyenleriCek = () => {
-    fetch(`${API_URL}/kullanicilar`)
+    // ESKİ: /kullanicilar -> YENİ: /ik/kullanicilar
+    fetch(`${API_URL}/ik/kullanicilar`)
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) {
@@ -108,15 +99,8 @@ export default function AdminDashboard() {
       });
   };
 
-  // Sayfa açılınca çek
-  useEffect(() => {
-    bekleyenleriCek();
-    // ... diğer fetchler ...
-  }, []);
-
   // Onaylama İşlemi
   const personelOnayla = (id, karar) => {
-    // karar: 'Aktif' veya 'Reddedildi' (Reddedilirse silebiliriz de, şimdilik pasif yapalım)
     fetch(`${API_URL}/auth/onay/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -124,7 +108,6 @@ export default function AdminDashboard() {
     }).then(() => {
       message.success(`Personel ${karar} edildi.`);
       bekleyenleriCek(); // Listeyi yenile
-      // Dashboard sayılarını da yenilemek gerekebilir
     });
   };
 
@@ -143,9 +126,8 @@ export default function AdminDashboard() {
           >
             <Statistic
               title="Onay Bekleyen Ödeme"
-              value={veri.bekleyen_odeme}
-              precision={2}
-              suffix="₺"
+              value={veri.bekleyenTalepler || 0} // Backend'den gelen anahtar ismine dikkat
+              suffix=" Adet"
               prefix={<DollarOutlined />}
               valueStyle={{ color: "#faad14" }}
             />
@@ -164,7 +146,7 @@ export default function AdminDashboard() {
           >
             <Statistic
               title="Acil / Geciken İşler"
-              value={veri.riskli_isler.length}
+              value={veri.riskli_isler ? veri.riskli_isler.length : 0}
               prefix={<AlertOutlined />}
               valueStyle={{ color: "#cf1322" }}
             />
@@ -183,7 +165,7 @@ export default function AdminDashboard() {
           >
             <Statistic
               title="Bugün İzinli"
-              value={veri.bugun_izinli}
+              value={veri.bugun_izinli || 0} // Eğer null gelirse 0 göster
               suffix="Kişi"
               prefix={<TeamOutlined />}
               valueStyle={{ color: "#1890ff" }}
@@ -202,9 +184,8 @@ export default function AdminDashboard() {
             style={{ cursor: "pointer", borderTop: "3px solid #52c41a" }}
           >
             <Statistic
-              title="Şirket Başarı Oranı"
-              value={Math.round((veri.biten / (veri.toplam || 1)) * 100)}
-              suffix="%"
+              title="Toplam Tamamlanan İş"
+              value={veri.toplamGorev || 0} // Backend'den gelen veriye göre uyarladım
               prefix={<ArrowUpOutlined />}
               valueStyle={{ color: "#52c41a" }}
             />
@@ -213,7 +194,8 @@ export default function AdminDashboard() {
             </div>
           </Card>
         </Col>
-        {/* PERSONEL ONAY KARTI */}
+
+        {/* PERSONEL ONAY KARTI (Ekstra olarak alta veya yana eklenebilir) */}
         <Col span={6}>
           <Card
             hoverable
@@ -239,37 +221,25 @@ export default function AdminDashboard() {
           <Card
             title={
               <span>
-                <ProjectOutlined /> Proje İlerleme Durumları
+                <ProjectOutlined /> Görev Durumları
               </span>
             }
           >
             <List
-              dataSource={veri.proje_durumlari}
+              dataSource={veri.gorevDurumlari || []}
               renderItem={(item) => {
-                const toplam = item.toplam_is || 1;
-                const yuzde = Math.round((item.biten_is / toplam) * 100);
+                // Basit bir liste gösterimi
                 return (
                   <List.Item>
-                    <div style={{ width: "100%" }}>
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          marginBottom: 5,
-                        }}
-                      >
-                        <strong>{item.ad || "Genel Görevler"}</strong>
-                        <span style={{ color: "#888" }}>
-                          {item.biten_is} / {item.toplam_is} Görev
-                        </span>
-                      </div>
-                      <Progress
-                        percent={yuzde}
-                        status={yuzde === 100 ? "success" : "active"}
-                        strokeColor={
-                          yuzde < 30 ? "red" : yuzde < 70 ? "orange" : "#52c41a"
-                        }
-                      />
+                    <div
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <strong>{item.durum}</strong>
+                      <Tag color="blue">{item.count} Adet</Tag>
                     </div>
                   </List.Item>
                 );
@@ -288,7 +258,7 @@ export default function AdminDashboard() {
             style={{ height: "100%" }}
           >
             <List
-              dataSource={veri.riskli_isler}
+              dataSource={veri.riskli_isler || []}
               renderItem={(item) => {
                 const tarih = dayjs(item.tarih);
                 const bugun = dayjs();
@@ -315,7 +285,7 @@ export default function AdminDashboard() {
                 );
               }}
             />
-            {veri.riskli_isler.length === 0 && (
+            {(!veri.riskli_isler || veri.riskli_isler.length === 0) && (
               <div style={{ textAlign: "center", color: "green", padding: 20 }}>
                 <CheckCircleOutlined /> Her şey yolunda!
               </div>
@@ -367,7 +337,7 @@ export default function AdminDashboard() {
         width={700}
       >
         <Table
-          dataSource={veri.riskli_isler}
+          dataSource={veri.riskli_isler || []}
           rowKey="id"
           pagination={false}
           columns={[
@@ -434,49 +404,28 @@ export default function AdminDashboard() {
 
       {/* 4. PROJE DURUMLARI DETAYI */}
       <Modal
-        title="Proje Bazlı İlerleme"
+        title="Proje/Görev Durumları"
         open={projeModal}
         onCancel={() => setProjeModal(false)}
         footer={null}
         width={600}
       >
         <Table
-          dataSource={veri.proje_durumlari}
-          rowKey="id"
+          dataSource={veri.gorevDurumlari || []}
+          rowKey="durum"
           pagination={false}
           columns={[
             {
-              title: "Proje Adı",
-              dataIndex: "ad",
-              render: (t) => <b>{t || "Genel İşler"}</b>,
+              title: "Durum",
+              dataIndex: "durum",
+              render: (t) => <b>{t}</b>,
             },
-            { title: "Toplam İş", dataIndex: "toplam_is", align: "center" },
-            {
-              title: "Biten",
-              dataIndex: "biten_is",
-              align: "center",
-              render: (t) => (
-                <span style={{ color: "green", fontWeight: "bold" }}>{t}</span>
-              ),
-            },
-            {
-              title: "İlerleme",
-              render: (_, r) => {
-                const toplam = r.toplam_is || 1;
-                const yuzde = Math.round((r.biten_is / toplam) * 100);
-                return (
-                  <Progress
-                    percent={yuzde}
-                    size="small"
-                    status={yuzde === 100 ? "success" : "active"}
-                  />
-                );
-              },
-            },
+            { title: "Adet", dataIndex: "count", align: "center" },
           ]}
         />
       </Modal>
-      {/* PERSONEL ONAY MODALI */}
+
+      {/* 5. PERSONEL ONAY MODALI */}
       <Modal
         title="Aramıza Katılmak İsteyenler"
         open={personelModal}
