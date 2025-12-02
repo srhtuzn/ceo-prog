@@ -147,26 +147,65 @@ router.post("/izinler", async (req, res) => {
       gun_sayisi,
     } = req.body;
 
-    // Şemaya göre: talep_eden, baslangic_tarihi, bitis_tarihi, aciklama, tur, durum, gun_sayisi
+    // 1. Önce talep edenin DEPARTMANINI bul
+    const userRes = await pool.query(
+      "SELECT departman FROM kullanicilar WHERE ad_soyad = $1",
+      [ad_soyad]
+    );
+    let departman = "Genel"; // Varsayılan
+    if (userRes.rows.length > 0) {
+      departman = userRes.rows[0].departman;
+    }
+
+    // 2. Kaydı oluştur
     const insert = await pool.query(
-      "INSERT INTO izinler (talep_eden, baslangic_tarihi, bitis_tarihi, aciklama, tur, durum, gun_sayisi) VALUES ($1, $2, $3, $4, $5, 'Yönetici Onayı Bekliyor', $6) RETURNING *",
-      [ad_soyad, baslangic_tarihi, bitis_tarihi, aciklama, turu, gun_sayisi]
+      "INSERT INTO izinler (talep_eden, baslangic_tarihi, bitis_tarihi, aciklama, tur, durum, gun_sayisi, departman) VALUES ($1, $2, $3, $4, $5, 'Yönetici Onayı Bekliyor', $6, $7) RETURNING *",
+      [
+        ad_soyad,
+        baslangic_tarihi,
+        bitis_tarihi,
+        aciklama,
+        turu,
+        gun_sayisi,
+        departman,
+      ]
     );
 
-    // Bildirim
-    const bildirim = `📅 ${ad_soyad} yeni bir izin talebi oluşturdu (${turu}).`;
-    await pool.query("INSERT INTO bildirimler (mesaj, kime) VALUES ($1, $2)", [
-      bildirim,
-      "İlgililer",
-    ]);
+    // 3. BİLDİRİMİ KİME GÖNDERELİM?
+    // A. O departmanın müdürlerini bul
+    const mudurler = await pool.query(
+      "SELECT ad_soyad FROM kullanicilar WHERE departman = $1 AND rol = 'Departman Müdürü'",
+      [departman]
+    );
+
+    // B. Bildirim metni
+    const bildirim = `📅 ${ad_soyad} (${departman}) izin talep etti. Onay bekleniyor.`;
+
+    // C. Müdürlere gönder
+    for (let mudur of mudurler.rows) {
+      await pool.query(
+        "INSERT INTO bildirimler (mesaj, kime) VALUES ($1, $2)",
+        [bildirim, mudur.ad_soyad]
+      );
+    }
+
+    // D. Genel Müdüre de gönder (Opsiyonel ama iyi olur)
+    const gmler = await pool.query(
+      "SELECT ad_soyad FROM kullanicilar WHERE rol = 'Genel Müdür'"
+    );
+    for (let gm of gmler.rows) {
+      await pool.query(
+        "INSERT INTO bildirimler (mesaj, kime) VALUES ($1, $2)",
+        [bildirim, gm.ad_soyad]
+      );
+    }
 
     res.json(insert.rows[0]);
   } catch (err) {
     console.error(err.message);
-    res.status(500).send("İzin oluşturulamadı");
+    res.status(500).send("Hata");
   }
 });
-
 // İzin talebini iptal et
 router.put("/izinler/iptal/:id", async (req, res) => {
   try {

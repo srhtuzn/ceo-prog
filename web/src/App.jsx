@@ -7,12 +7,12 @@ import AdminDashboard from "./AdminDashboard";
 import GorevYonetimi from "./GorevYonetimi";
 import DosyaYoneticisi from "./DosyaYoneticisi";
 import ProfilYonetimi from "./ProfilYonetimi";
+import BildirimYonetimi from "./BildirimYonetimi"; // <-- YENİ BİLEŞEN
 import {
   DesktopOutlined,
   UnorderedListOutlined,
   CalendarOutlined,
   LogoutOutlined,
-  BellOutlined,
   UserOutlined,
   DollarOutlined,
   TeamOutlined,
@@ -21,7 +21,9 @@ import {
   MenuUnfoldOutlined,
   MenuFoldOutlined,
   FolderOpenOutlined,
-  PlusCircleOutlined, // <-- YENİ İKON
+  PlusCircleOutlined,
+  ProjectOutlined,
+  SaveOutlined,
 } from "@ant-design/icons";
 import {
   Layout,
@@ -33,15 +35,17 @@ import {
   Select,
   DatePicker,
   message,
-  List,
   Avatar,
   Space,
   Typography,
-  Popover,
   Dropdown,
-  Badge,
+  Tabs, // <-- EKLENDİ
+  Popconfirm, // <-- EKLENDİ
+  Table, // <-- EKLENDİ (Hata buradaydı)
+  Tag, // <-- EKLENDİ
+  Row, // <-- EKLENDİ
+  Col,
 } from "antd";
-import dayjs from "dayjs";
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text } = Typography;
@@ -68,9 +72,7 @@ function App() {
   const [sayfa, setSayfa] = useState("dashboard");
   const [projeler, setProjeler] = useState([]);
   const [kullanicilar, setKullanicilar] = useState([]);
-  const [bildirimler, setBildirimler] = useState([]);
-  const [okunmamisSayisi, setOkunmamisSayisi] = useState(0);
-  const [bildirimAcik, setBildirimAcik] = useState(false);
+  // NOT: Bildirim state'leri buradan kaldırıldı, BildirimYonetimi.jsx'e taşındı.
 
   const [hedefGorevId, setHedefGorevId] = useState(null);
   const [projeModalAcik, setProjeModalAcik] = useState(false);
@@ -140,8 +142,8 @@ function App() {
   useEffect(() => {
     if (aktifKullanici) {
       kullaniciCek();
-      bildirimCek();
       projeCek();
+      // Bildirim çekme işlemi artık burada değil
     }
   }, [aktifKullanici]);
 
@@ -154,26 +156,14 @@ function App() {
     fetch(`${API_URL}/ik/kullanicilar`)
       .then((res) => res.json())
       .then((data) => setKullanicilar(data));
-
-  const bildirimCek = () => {
-    fetch(`${API_URL}/dashboard/bildirimler?kime=${aktifKullanici.ad_soyad}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setBildirimler(data);
-          setOkunmamisSayisi(data.filter((b) => !b.okundu).length);
-        }
-      });
+  const projeSil = (id) => {
+    fetch(`${API_URL}/gorevler/projeler/${id}`, { method: "DELETE" }).then(
+      () => {
+        message.success("Proje silindi");
+        projeCek(); // Listeyi yenile
+      }
+    );
   };
-
-  const bildirimleriOkunduYap = () =>
-    fetch(
-      `${API_URL}/dashboard/bildirimler/hepsini-oku?kime=${aktifKullanici.ad_soyad}`,
-      { method: "PUT" }
-    ).then(() => {
-      setOkunmamisSayisi(0);
-      bildirimCek();
-    });
 
   const projeKaydet = (degerler) => {
     const payload = {
@@ -200,13 +190,11 @@ function App() {
       });
   };
 
-  const bildirimTikla = (bildirim) => {
-    setBildirimAcik(false);
-    if (bildirim.gorev_id) {
-      setHedefGorevId(bildirim.gorev_id);
-      setSayfa("list");
-    } else {
-      message.info(bildirim.mesaj);
+  // Bildirim bileşeninden gelen navigasyon isteğini yönet
+  const handleBildirimNavigasyon = (gorevId) => {
+    if (gorevId) {
+      setHedefGorevId(gorevId);
+      setSayfa("list"); // Listeye git
     }
   };
 
@@ -268,7 +256,6 @@ function App() {
               onClick={() => setCollapsed(!collapsed)}
               style={{ fontSize: "16px" }}
             />
-
             <Title level={5} style={{ margin: 0 }}>
               {sayfa === "dashboard"
                 ? "Genel Bakış"
@@ -283,52 +270,13 @@ function App() {
           </div>
 
           <Space>
-            {/* --- YENİ PROJE EKLEME BUTONU (Sadece Yöneticiler) --- */}
-            {yoneticiMi && (
-              <Button
-                type="primary"
-                icon={<PlusCircleOutlined />}
-                style={{ backgroundColor: "#52c41a", borderColor: "#52c41a" }}
-                onClick={() => setProjeModalAcik(true)}
-              >
-                Yeni Proje
-              </Button>
-            )}
-            {/* --------------------------------------------------- */}
+            {/* --- YENİ BİLDİRİM BİLEŞENİ --- */}
+            <BildirimYonetimi
+              aktifKullanici={aktifKullanici}
+              onNavigasyon={handleBildirimNavigasyon}
+            />
+            {/* ------------------------------- */}
 
-            <Popover
-              content={
-                <List
-                  dataSource={bildirimler}
-                  renderItem={(item) => (
-                    <List.Item
-                      onClick={() => bildirimTikla(item)}
-                      style={{
-                        background: item.okundu ? "white" : "#e6f7ff",
-                        padding: 10,
-                        cursor: "pointer",
-                      }}
-                    >
-                      <List.Item.Meta
-                        title={item.mesaj}
-                        description={dayjs(item.tarih).format("HH:mm")}
-                      />
-                    </List.Item>
-                  )}
-                />
-              }
-              title="Bildirimler"
-              trigger="click"
-              open={bildirimAcik}
-              onOpenChange={(v) => {
-                setBildirimAcik(v);
-                if (v) bildirimleriOkunduYap();
-              }}
-            >
-              <Badge count={okunmamisSayisi}>
-                <Button shape="circle" icon={<BellOutlined />} />
-              </Badge>
-            </Popover>
             <Dropdown menu={userMenu} trigger={["click"]}>
               <div
                 style={{
@@ -385,21 +333,19 @@ function App() {
                 </Button>
               </div>
             ))}
-
           {(sayfa === "list" || sayfa === "board" || sayfa === "calendar") && (
             <GorevYonetimi
               aktifKullanici={aktifKullanici}
               projeler={projeler}
               kullanicilar={kullanicilar}
-              bildirimler={bildirimler}
               acilacakGorevId={hedefGorevId}
               viewMode={sayfa}
+              projeModalAc={() => setProjeModalAcik(true)}
             />
           )}
           {sayfa === "drive" && (
             <DosyaYoneticisi aktifKullanici={aktifKullanici} />
           )}
-
           {sayfa === "satinalma" && (
             <SatinAlma aktifKullanici={aktifKullanici} />
           )}
@@ -411,35 +357,150 @@ function App() {
       </Layout>
 
       <Modal
-        title="Yeni Proje Başlat"
+        title="Proje Yönetimi"
         open={projeModalAcik}
         onCancel={() => setProjeModalAcik(false)}
         footer={null}
+        width={800}
+        destroyOnClose
       >
-        <Form layout="vertical" onFinish={projeKaydet}>
-          <Form.Item name="ad" label="Proje Adı" rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item
-            name="departman"
-            label="Departman"
-            initialValue={aktifKullanici.departman}
-          >
-            <Select>
-              <Option value="Bilgi İşlem">Bilgi İşlem</Option>
-              <Option value="Muhasebe">Muhasebe</Option>
-              <Option value="Satış">Satış</Option>
-              <Option value="Yönetim">Yönetim</Option>
-              <Option value="İK">İnsan Kaynakları</Option>
-            </Select>
-          </Form.Item>
-          <Form.Item name="tarih" label="Süre">
-            <DatePicker.RangePicker style={{ width: "100%" }} />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" block>
-            Oluştur
-          </Button>
-        </Form>
+        <Tabs
+          defaultActiveKey="1"
+          items={[
+            {
+              key: "1",
+              label: (
+                <span>
+                  <UnorderedListOutlined /> Mevcut Projeler
+                </span>
+              ),
+              children: (
+                <Table
+                  dataSource={projeler}
+                  rowKey="id"
+                  pagination={{ pageSize: 5 }}
+                  size="small"
+                  columns={[
+                    {
+                      title: "Proje Adı",
+                      dataIndex: "ad",
+                      render: (t) => <b>{t}</b>,
+                    },
+                    {
+                      title: "Departman",
+                      dataIndex: "departman",
+                      render: (d) => <Tag>{d}</Tag>,
+                    },
+                    {
+                      title: "Tarihler",
+                      render: (_, r) => (
+                        <div style={{ fontSize: 11, color: "#666" }}>
+                          {r.baslangic_tarihi
+                            ? dayjs(r.baslangic_tarihi).format("DD.MM.YY")
+                            : "?"}{" "}
+                          -{" "}
+                          {r.bitis_tarihi
+                            ? dayjs(r.bitis_tarihi).format("DD.MM.YY")
+                            : "?"}
+                        </div>
+                      ),
+                    },
+                    {
+                      title: "Durum",
+                      render: (_, r) => {
+                        const bitis = dayjs(r.bitis_tarihi);
+                        const bugun = dayjs();
+                        const bittiMi = r.bitis_tarihi && bitis.isBefore(bugun);
+                        return bittiMi ? (
+                          <Tag color="red">Süresi Doldu</Tag>
+                        ) : (
+                          <Tag color="green">Aktif</Tag>
+                        );
+                      },
+                    },
+                    {
+                      title: "İşlem",
+                      align: "center",
+                      render: (_, r) => (
+                        <Popconfirm
+                          title="Projeyi silmek istediğinize emin misiniz?"
+                          description="Projeye bağlı görevler silinmez, 'Genel' boşa düşer."
+                          onConfirm={() => projeSil(r.id)}
+                          okText="Evet, Sil"
+                          cancelText="İptal"
+                        >
+                          <Button
+                            type="text"
+                            danger
+                            size="small"
+                            icon={<DeleteOutlined />}
+                          />
+                        </Popconfirm>
+                      ),
+                    },
+                  ]}
+                />
+              ),
+            },
+            {
+              key: "2",
+              label: (
+                <span>
+                  <PlusCircleOutlined /> Yeni Oluştur
+                </span>
+              ),
+              children: (
+                <Form layout="vertical" onFinish={projeKaydet}>
+                  <Form.Item
+                    name="ad"
+                    label="Proje Adı"
+                    rules={[
+                      { required: true, message: "Lütfen proje adı girin" },
+                    ]}
+                  >
+                    <Input
+                      placeholder="Örn: 2025 Web Sitesi Yenileme"
+                      prefix={<ProjectOutlined />}
+                    />
+                  </Form.Item>
+                  <Row gutter={16}>
+                    <Col span={12}>
+                      {/* --- DEPARTMAN SEÇİMİ (EKLENDİ) --- */}
+                      <Form.Item
+                        name="departman"
+                        label="Departman"
+                        initialValue={aktifKullanici.departman}
+                      >
+                        <Select>
+                          <Option value="Bilgi İşlem">Bilgi İşlem</Option>
+                          <Option value="Muhasebe">Muhasebe</Option>
+                          <Option value="Satış">Satış</Option>
+                          <Option value="Yönetim">Yönetim</Option>
+                          <Option value="İK">İnsan Kaynakları</Option>
+                        </Select>
+                      </Form.Item>
+                      {/* ---------------------------------- */}
+                    </Col>
+                    <Col span={12}>
+                      <Form.Item name="tarih" label="Proje Süresi">
+                        <DatePicker.RangePicker style={{ width: "100%" }} />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    block
+                    icon={<SaveOutlined />}
+                  >
+                    Projeyi Kaydet
+                  </Button>
+                </Form>
+              ),
+            },
+          ]}
+        />
       </Modal>
 
       <ProfilYonetimi

@@ -438,4 +438,27 @@ router.post("/projeler", async (req, res) => {
   }
 });
 
+// 9. PROJE SİLME (Güvenli Silme)
+// URL: DELETE /gorevler/projeler/:id
+// ==========================================
+router.delete("/projeler/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 1. Önce bu projeye bağlı görevlerin proje_id'sini NULL yap (Görevler silinmesin)
+    await pool.query(
+      "UPDATE gorevler SET proje_id = NULL WHERE proje_id = $1",
+      [id]
+    );
+
+    // 2. Projeyi sil
+    await pool.query("DELETE FROM projeler WHERE id = $1", [id]);
+
+    res.json({ message: "Proje silindi, bağlı görevler serbest bırakıldı." });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Proje silme hatası");
+  }
+});
+
 module.exports = router;
