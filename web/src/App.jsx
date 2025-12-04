@@ -7,7 +7,8 @@ import AdminDashboard from "./AdminDashboard";
 import GorevYonetimi from "./GorevYonetimi";
 import DosyaYoneticisi from "./DosyaYoneticisi";
 import ProfilYonetimi from "./ProfilYonetimi";
-import BildirimYonetimi from "./BildirimYonetimi"; // <-- YENİ BİLEŞEN
+import BildirimYonetimi from "./BildirimYonetimi";
+import ChatWidget from "./ChatWidget";
 import {
   DesktopOutlined,
   UnorderedListOutlined,
@@ -22,8 +23,11 @@ import {
   MenuFoldOutlined,
   FolderOpenOutlined,
   PlusCircleOutlined,
+  DeleteOutlined,
   ProjectOutlined,
   SaveOutlined,
+  PlusOutlined, // <-- Yeni İş butonu için
+  FolderAddOutlined, // <-- Proje butonu için
 } from "@ant-design/icons";
 import {
   Layout,
@@ -35,17 +39,19 @@ import {
   Select,
   DatePicker,
   message,
+  List,
   Avatar,
   Space,
   Typography,
   Dropdown,
-  Tabs, // <-- EKLENDİ
-  Popconfirm, // <-- EKLENDİ
-  Table, // <-- EKLENDİ (Hata buradaydı)
-  Tag, // <-- EKLENDİ
-  Row, // <-- EKLENDİ
+  Tabs,
+  Popconfirm,
+  Table,
+  Tag,
+  Row,
   Col,
 } from "antd";
+import dayjs from "dayjs";
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text } = Typography;
@@ -72,11 +78,15 @@ function App() {
   const [sayfa, setSayfa] = useState("dashboard");
   const [projeler, setProjeler] = useState([]);
   const [kullanicilar, setKullanicilar] = useState([]);
-  // NOT: Bildirim state'leri buradan kaldırıldı, BildirimYonetimi.jsx'e taşındı.
 
   const [hedefGorevId, setHedefGorevId] = useState(null);
   const [projeModalAcik, setProjeModalAcik] = useState(false);
   const [profilModalAcik, setProfilModalAcik] = useState(false);
+  const [aktifTab, setAktifTab] = useState("1");
+  const [yeniIsModalAcik, setYeniIsModalAcik] = useState(false); // Yeni İş Modalı için State
+
+  // DEBUG İÇİN: Konsola kullanıcının rolünü yazdırıyorum
+  console.log("Giriş Yapan Rol:", aktifKullanici?.rol);
 
   const YONETICILER = [
     "Genel Müdür",
@@ -143,31 +153,23 @@ function App() {
     if (aktifKullanici) {
       kullaniciCek();
       projeCek();
-      // Bildirim çekme işlemi artık burada değil
     }
   }, [aktifKullanici]);
 
   const projeCek = () =>
     fetch(`${API_URL}/gorevler/projeler`)
       .then((res) => res.json())
-      .then((data) => setProjeler(data));
+      .then((data) => setProjeler(Array.isArray(data) ? data : []));
 
   const kullaniciCek = () =>
     fetch(`${API_URL}/ik/kullanicilar`)
       .then((res) => res.json())
       .then((data) => setKullanicilar(data));
-  const projeSil = (id) => {
-    fetch(`${API_URL}/gorevler/projeler/${id}`, { method: "DELETE" }).then(
-      () => {
-        message.success("Proje silindi");
-        projeCek(); // Listeyi yenile
-      }
-    );
-  };
 
   const projeKaydet = (degerler) => {
     const payload = {
-      ...degerler,
+      ad: degerler.ad,
+      departman: degerler.departman,
       olusturan: aktifKullanici.ad_soyad,
       baslangic_tarihi: degerler.tarih
         ? degerler.tarih[0].format("YYYY-MM-DD")
@@ -185,16 +187,25 @@ function App() {
       .then((res) => res.json())
       .then(() => {
         message.success("Proje oluşturuldu");
-        setProjeModalAcik(false);
         projeCek();
-      });
+        setAktifTab("1");
+      })
+      .catch(() => message.error("Proje kaydedilemedi"));
   };
 
-  // Bildirim bileşeninden gelen navigasyon isteğini yönet
+  const projeSil = (id) => {
+    fetch(`${API_URL}/gorevler/projeler/${id}`, { method: "DELETE" }).then(
+      () => {
+        message.success("Proje silindi");
+        projeCek();
+      }
+    );
+  };
+
   const handleBildirimNavigasyon = (gorevId) => {
     if (gorevId) {
       setHedefGorevId(gorevId);
-      setSayfa("list"); // Listeye git
+      setSayfa("list");
     }
   };
 
@@ -270,12 +281,22 @@ function App() {
           </div>
 
           <Space>
-            {/* --- YENİ BİLDİRİM BİLEŞENİ --- */}
+            {/* --- PROJE YÖNETİM BUTONU (HERKES GÖRSÜN DİYE KONTROLÜ KALDIRDIM) --- */}
+            <Button
+              icon={<FolderAddOutlined />}
+              onClick={() => {
+                setProjeModalAcik(true);
+                setAktifTab("1");
+              }}
+            >
+              Projeler
+            </Button>
+            {/* ------------------------------------------------------------------- */}
+
             <BildirimYonetimi
               aktifKullanici={aktifKullanici}
               onNavigasyon={handleBildirimNavigasyon}
             />
-            {/* ------------------------------- */}
 
             <Dropdown menu={userMenu} trigger={["click"]}>
               <div
@@ -333,6 +354,7 @@ function App() {
                 </Button>
               </div>
             ))}
+
           {(sayfa === "list" || sayfa === "board" || sayfa === "calendar") && (
             <GorevYonetimi
               aktifKullanici={aktifKullanici}
@@ -340,7 +362,10 @@ function App() {
               kullanicilar={kullanicilar}
               acilacakGorevId={hedefGorevId}
               viewMode={sayfa}
-              projeModalAc={() => setProjeModalAcik(true)}
+              projeModalAc={() => {
+                setProjeModalAcik(true);
+                setAktifTab("1");
+              }}
             />
           )}
           {sayfa === "drive" && (
@@ -356,6 +381,7 @@ function App() {
         </Content>
       </Layout>
 
+      {/* --- PROJE YÖNETİM MODALI --- */}
       <Modal
         title="Proje Yönetimi"
         open={projeModalAcik}
@@ -365,7 +391,8 @@ function App() {
         destroyOnClose
       >
         <Tabs
-          defaultActiveKey="1"
+          activeKey={aktifTab}
+          onChange={setAktifTab}
           items={[
             {
               key: "1",
@@ -465,7 +492,6 @@ function App() {
                   </Form.Item>
                   <Row gutter={16}>
                     <Col span={12}>
-                      {/* --- DEPARTMAN SEÇİMİ (EKLENDİ) --- */}
                       <Form.Item
                         name="departman"
                         label="Departman"
@@ -479,7 +505,6 @@ function App() {
                           <Option value="İK">İnsan Kaynakları</Option>
                         </Select>
                       </Form.Item>
-                      {/* ---------------------------------- */}
                     </Col>
                     <Col span={12}>
                       <Form.Item name="tarih" label="Proje Süresi">
@@ -487,7 +512,6 @@ function App() {
                       </Form.Item>
                     </Col>
                   </Row>
-
                   <Button
                     type="primary"
                     htmlType="submit"
@@ -509,6 +533,7 @@ function App() {
         aktifKullanici={aktifKullanici}
         guncelle={kullaniciGuncelle}
       />
+      <ChatWidget aktifKullanici={aktifKullanici} />
     </Layout>
   );
 }

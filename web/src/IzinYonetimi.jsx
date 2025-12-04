@@ -18,6 +18,8 @@ import {
   Statistic,
   Popconfirm,
   Tooltip,
+  Tabs,
+  Progress,
 } from "antd";
 import {
   PlusOutlined,
@@ -25,12 +27,23 @@ import {
   CheckCircleOutlined,
   StopOutlined,
   FastForwardOutlined,
+  CalendarOutlined,
+  MedicineBoxOutlined,
+  HomeOutlined,
+  ClockCircleOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 
 const API_URL = "http://localhost:3000";
 const { Option } = Select;
 const { RangePicker } = DatePicker;
+
+// İzin Türlerine Göre Renk ve İkonlar
+const IZIN_TURLERI = {
+  "Yıllık İzin": { color: "blue", icon: <CalendarOutlined /> },
+  "Hastalık/Rapor": { color: "red", icon: <MedicineBoxOutlined /> },
+  "Mazeret İzni": { color: "orange", icon: <HomeOutlined /> },
+};
 
 export default function IzinYonetimi({ aktifKullanici }) {
   const [izinler, setIzinler] = useState([]);
@@ -39,6 +52,8 @@ export default function IzinYonetimi({ aktifKullanici }) {
   const [kullanilanIzin, setKullanilanIzin] = useState(0);
   const [yukleniyor, setYukleniyor] = useState(false);
   const [toplamHak, setToplamHak] = useState(14);
+
+  const [aktifTab, setAktifTab] = useState("hepsi"); // Filtreleme için
 
   if (!aktifKullanici)
     return <div style={{ padding: 20 }}>Kullanıcı verisi bekleniyor...</div>;
@@ -50,7 +65,6 @@ export default function IzinYonetimi({ aktifKullanici }) {
 
   const veriCek = () => {
     setYukleniyor(true);
-    // userId gönderiyoruz ki backend kimin istediğini bilsin
     fetch(`${API_URL}/ik/izinler?userId=${aktifKullanici.id}`)
       .then((res) => res.json())
       .then((data) => {
@@ -68,7 +82,7 @@ export default function IzinYonetimi({ aktifKullanici }) {
     fetch(`${API_URL}/ik/izinler/kullanilan/${aktifKullanici.ad_soyad}`)
       .then((res) => res.json())
       .then((data) => {
-        setKullanilanIzin(data.kullanılan || 0);
+        setKullanilanIzin(data.kullanilan || 0);
         setToplamHak(data.toplam_hak || 14);
       })
       .catch(() => {
@@ -150,31 +164,64 @@ export default function IzinYonetimi({ aktifKullanici }) {
       <ul style={{ listStyle: "none", padding: 0 }}>
         {oGunIzinliler.map((i) => (
           <li key={i.id}>
-            <Badge
-              status="warning"
-              text={i.talep_eden}
-              style={{ fontSize: 10 }}
-            />
+            <Tag
+              color={IZIN_TURLERI[i.tur]?.color || "default"}
+              style={{
+                width: "100%",
+                fontSize: 10,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {i.talep_eden}
+            </Tag>
           </li>
         ))}
       </ul>
     );
   };
 
+  // FİLTRELEME MANTIĞI
+  const filtrelenmisIzinler = izinler.filter((i) => {
+    if (aktifTab === "hepsi") return true;
+    if (aktifTab === "bekleyen") return i.durum.includes("Bekliyor");
+    if (aktifTab === "onayli") return i.durum === "Onaylandı";
+    if (aktifTab === "red")
+      return i.durum === "Reddedildi" || i.durum.includes("İptal");
+    return true;
+  });
+
   const columns = [
-    { title: "Personel", dataIndex: "talep_eden" },
+    {
+      title: "Personel",
+      dataIndex: "talep_eden",
+      render: (t) => <span style={{ fontWeight: 600 }}>{t}</span>,
+    },
     {
       title: "Tür",
       dataIndex: "tur",
-      render: (t) => <Tag color="blue">{t}</Tag>,
+      render: (t) => {
+        const meta = IZIN_TURLERI[t] || {};
+        return (
+          <Tag color={meta.color} icon={meta.icon}>
+            {t}
+          </Tag>
+        );
+      },
     },
     {
-      title: "Tarih",
+      title: "Tarih Aralığı",
       render: (_, r) => (
-        <span>
-          {dayjs(r.baslangic_tarihi).format("DD.MM")} -{" "}
-          {dayjs(r.bitis_tarihi).format("DD.MM")} ({r.gun_sayisi} gün)
-        </span>
+        <div style={{ fontSize: 12 }}>
+          <div>
+            {dayjs(r.baslangic_tarihi).format("DD.MM.YYYY")} -{" "}
+            {dayjs(r.bitis_tarihi).format("DD.MM.YYYY")}
+          </div>
+          <div style={{ color: "#888" }}>
+            <ClockCircleOutlined /> {r.gun_sayisi} Gün
+          </div>
+        </div>
       ),
     },
     {
@@ -182,32 +229,43 @@ export default function IzinYonetimi({ aktifKullanici }) {
       dataIndex: "durum",
       render: (d) => {
         let color = "orange";
-        if (d === "Onaylandı") color = "green";
-        if (d === "Reddedildi") color = "red";
-        if (d === "İptal Edildi") color = "default";
-        return <Tag color={color}>{d}</Tag>;
+        let icon = <ClockCircleOutlined />;
+        if (d === "Onaylandı") {
+          color = "success";
+          icon = <CheckCircleOutlined />;
+        }
+        if (d === "Reddedildi") {
+          color = "error";
+          icon = <StopOutlined />;
+        }
+        if (d === "İptal Edildi") {
+          color = "default";
+          icon = <StopOutlined />;
+        }
+        return (
+          <Tag icon={icon} color={color}>
+            {d}
+          </Tag>
+        );
       },
     },
     {
       title: "İşlem",
+      align: "center",
       render: (_, r) => {
         const rol = aktifKullanici?.rol || "";
         const kendiTalebi = r.talep_eden === aktifKullanici.ad_soyad;
         const durum = r.durum || "";
-
         const gmMi = rol.includes("Genel Müdür");
         const mudurMu =
           rol.includes("Departman Müdürü") ||
           rol.includes("Yönetici") ||
           rol.includes("Süpervizör");
 
-        // BUTON MANTIĞI BURADA KURULUYOR 🧠
         return (
           <Space>
-            {/* SENARYO 1: YÖNETİCİ ONAYI BEKLENİYOR (İlk Aşama) */}
             {durum === "Yönetici Onayı Bekliyor" && (
               <>
-                {/* Müdür Sadece 'Onayla' (GM'ye sevk et) ve 'Reddet' görür */}
                 {mudurMu && !gmMi && (
                   <>
                     <Tooltip title="Onayla ve GM'ye Gönder">
@@ -216,70 +274,61 @@ export default function IzinYonetimi({ aktifKullanici }) {
                         type="primary"
                         icon={<CheckCircleOutlined />}
                         onClick={() => onaylaReddet(r.id, "Onayla")}
-                      >
-                        Onayla
-                      </Button>
+                      />
                     </Tooltip>
                     <Button
                       size="small"
                       danger
                       icon={<StopOutlined />}
                       onClick={() => onaylaReddet(r.id, "Reddet")}
-                    >
-                      Reddet
-                    </Button>
+                    />
                   </>
                 )}
-
-                {/* GM Sadece 'Direkt Onayla' (Hızlı Onay) ve 'Reddet' görür */}
                 {gmMi && (
                   <>
-                    <Tooltip title="Müdürü beklemeden direkt onayla">
+                    <Tooltip title="Müdürü atla ve direkt onayla">
                       <Button
                         size="small"
                         style={{ backgroundColor: "#722ed1", color: "white" }}
                         icon={<FastForwardOutlined />}
                         onClick={() => onaylaReddet(r.id, "Direkt Onayla")}
-                      >
-                        Direkt Onayla
-                      </Button>
+                      />
                     </Tooltip>
                     <Button
                       size="small"
                       danger
                       icon={<StopOutlined />}
                       onClick={() => onaylaReddet(r.id, "Reddet")}
-                    >
-                      Reddet
-                    </Button>
+                    />
                   </>
                 )}
               </>
             )}
 
-            {/* SENARYO 2: GM ONAYI BEKLENİYOR (İkinci Aşama) */}
             {durum === "Genel Müdür Onayı Bekliyor" && gmMi && (
               <>
-                <Button
-                  size="small"
-                  type="primary"
-                  onClick={() => onaylaReddet(r.id, "Onayla")}
-                >
-                  Son Onayı Ver
-                </Button>
+                <Tooltip title="Son Onayı Ver">
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<CheckCircleOutlined />}
+                    onClick={() => onaylaReddet(r.id, "Onayla")}
+                  />
+                </Tooltip>
                 <Button
                   size="small"
                   danger
                   onClick={() => onaylaReddet(r.id, "Reddet")}
-                >
-                  Reddet
-                </Button>
+                  icon={<StopOutlined />}
+                />
               </>
             )}
 
-            {/* İPTAL BUTONU (Sadece kendi talebi ve bekliyorsa) */}
             {kendiTalebi && durum.includes("Bekliyor") && (
-              <Popconfirm title="İptal et?" onConfirm={() => iptalEt(r.id)}>
+              <Popconfirm
+                title="İptal etmek istediğinize emin misiniz?"
+                onConfirm={() => iptalEt(r.id)}
+              >
                 <Button
                   size="small"
                   type="text"
@@ -296,33 +345,54 @@ export default function IzinYonetimi({ aktifKullanici }) {
     },
   ];
 
+  // İzin Hakkı Doluluk Oranı
+  const dolulukOrani = Math.round((kullanilanIzin / toplamHak) * 100);
+
   return (
     <div>
+      {/* ÖZET KARTLARI */}
       <Row gutter={16} style={{ marginBottom: 20 }}>
         <Col span={8}>
           <Card>
-            <Statistic title="Toplam Hak" value={toplamHak} suffix="Gün" />
-          </Card>
-        </Col>
-        <Col span={8}>
-          <Card>
             <Statistic
-              title="Kullanılan"
-              value={kullanilanIzin}
-              valueStyle={{ color: "#faad14" }}
+              title="Toplam Yıllık İzin Hakkı"
+              value={toplamHak}
               suffix="Gün"
+              prefix={<CalendarOutlined />}
             />
           </Card>
         </Col>
         <Col span={8}>
           <Card>
+            <Row align="middle" justify="space-between">
+              <Col>
+                <Statistic
+                  title="Kullanılan"
+                  value={kullanilanIzin}
+                  suffix="Gün"
+                  valueStyle={{ color: "#1890ff" }}
+                />
+              </Col>
+              <Col>
+                <Progress
+                  type="circle"
+                  percent={dolulukOrani}
+                  width={50}
+                  format={() => `${dolulukOrani}%`}
+                />
+              </Col>
+            </Row>
+          </Card>
+        </Col>
+        <Col span={8}>
+          <Card>
             <Statistic
-              title="Kalan"
+              title="Kalan Bakiye"
               value={toplamHak - kullanilanIzin}
-              valueStyle={{
-                color: toplamHak - kullanilanIzin < 3 ? "red" : "#3f8600",
-              }}
               suffix="Gün"
+              valueStyle={{
+                color: toplamHak - kullanilanIzin < 3 ? "#cf1322" : "#3f8600",
+              }}
             />
           </Card>
         </Col>
@@ -331,7 +401,7 @@ export default function IzinYonetimi({ aktifKullanici }) {
       <Row gutter={16}>
         <Col span={14}>
           <Card
-            title="İzin Talepleri"
+            title="İzin Hareketleri"
             extra={
               !aktifKullanici.rol.includes("Genel Müdür") && (
                 <Button
@@ -339,27 +409,39 @@ export default function IzinYonetimi({ aktifKullanici }) {
                   icon={<PlusOutlined />}
                   onClick={() => setModalAcik(true)}
                 >
-                  İzin İste
+                  Yeni Talep
                 </Button>
               )
             }
           >
+            <Tabs
+              defaultActiveKey="hepsi"
+              onChange={setAktifTab}
+              items={[
+                { label: "Tümü", key: "hepsi" },
+                { label: "Bekleyenler", key: "bekleyen" },
+                { label: "Onaylananlar", key: "onayli" },
+                { label: "Red/İptal", key: "red" },
+              ]}
+            />
             <Table
-              dataSource={izinler}
+              dataSource={filtrelenmisIzinler}
               columns={columns}
               rowKey="id"
               pagination={{ pageSize: 5 }}
               loading={yukleniyor}
+              size="small"
             />
           </Card>
         </Col>
         <Col span={10}>
-          <Card title="İzin Takvimi">
+          <Card title="İzin Takvimi (Genel Görünüm)">
             <Calendar fullscreen={false} cellRender={dateCellRender} />
           </Card>
         </Col>
       </Row>
 
+      {/* MODAL */}
       <Modal
         title="İzin Talep Formu"
         open={modalAcik}
@@ -367,20 +449,28 @@ export default function IzinYonetimi({ aktifKullanici }) {
         footer={null}
       >
         <Form form={form} layout="vertical" onFinish={formGonder}>
-          <Form.Item name="tur" label="Tür" initialValue="Yıllık İzin">
+          <Form.Item name="tur" label="İzin Türü" initialValue="Yıllık İzin">
             <Select>
-              <Option value="Yıllık İzin">Yıllık İzin</Option>
-              <Option value="Rapor">Rapor</Option>
+              <Option value="Yıllık İzin">🌴 Yıllık İzin</Option>
+              <Option value="Hastalık/Rapor">🏥 Hastalık / Rapor</Option>
+              <Option value="Mazeret İzni">🏠 Mazeret İzni</Option>
             </Select>
           </Form.Item>
-          <Form.Item name="tarih" label="Tarih" rules={[{ required: true }]}>
+          <Form.Item
+            name="tarih"
+            label="Tarih Aralığı"
+            rules={[{ required: true }]}
+          >
             <RangePicker style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="aciklama" label="Açıklama">
-            <Input.TextArea rows={2} />
+          <Form.Item name="aciklama" label="Açıklama / Not">
+            <Input.TextArea
+              rows={3}
+              placeholder="Örn: Yıllık iznimin 5 gününü kullanmak istiyorum."
+            />
           </Form.Item>
-          <Button type="primary" htmlType="submit" block>
-            Gönder
+          <Button type="primary" htmlType="submit" block size="large">
+            Talebi Gönder
           </Button>
         </Form>
       </Modal>
