@@ -4,9 +4,7 @@ const pool = require("../config/db");
 const multer = require("multer");
 const path = require("path");
 
-// -----------------------------------------
-// MULTER AYARI
-// -----------------------------------------
+// MULTER
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, "uploads/"),
   filename: (req, file, cb) => {
@@ -17,20 +15,18 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // ==========================================
-// 1. TALEPLERİ GETİR (DEPARTMAN FİLTRESİ)
+// 1. TALEPLERİ GETİR
 // ==========================================
 router.get("/", async (req, res) => {
   try {
     const { userId } = req.query;
     if (!userId) return res.json([]);
 
-    // Kullanıcı bilgisi
     const userRes = await pool.query(
       "SELECT * FROM kullanicilar WHERE id = $1",
       [userId]
     );
     if (userRes.rows.length === 0) return res.json([]);
-
     const user = userRes.rows[0];
 
     let query = "";
@@ -42,10 +38,21 @@ router.get("/", async (req, res) => {
         (r) => user.rol.includes(r) || user.departman.includes(r)
       )
     ) {
-      query = "SELECT * FROM satin_alma ORDER BY id DESC";
+      query = `
+        SELECT s.*, k.ad_soyad as talep_eden 
+        FROM satin_alma s
+        LEFT JOIN kullanicilar k ON s.talep_eden_id = k.id
+        ORDER BY s.id DESC
+      `;
     } else {
       // Diğerleri kendi departmanını görür
-      query = "SELECT * FROM satin_alma WHERE departman = $1 ORDER BY id DESC";
+      query = `
+        SELECT s.*, k.ad_soyad as talep_eden 
+        FROM satin_alma s
+        LEFT JOIN kullanicilar k ON s.talep_eden_id = k.id
+        WHERE s.departman = $1 
+        ORDER BY s.id DESC
+      `;
       params = [user.departman];
     }
 
@@ -63,7 +70,7 @@ router.get("/", async (req, res) => {
 router.post("/", upload.single("dosya"), async (req, res) => {
   try {
     const {
-      talep_eden,
+      talep_eden_id,
       baslik,
       aciklama,
       tutar,
@@ -71,19 +78,17 @@ router.post("/", upload.single("dosya"), async (req, res) => {
       proje_id,
       departman,
     } = req.body;
-
     const dosya_yolu = req.file ? req.file.filename : null;
-
-    // Proje opsiyonel
     const pid =
       proje_id && proje_id !== "undefined" && proje_id !== "null"
         ? proje_id
         : null;
 
+    // A. Talebi Kaydet
     const result = await pool.query(
-      "INSERT INTO satin_alma (talep_eden, baslik, aciklama, tutar, para_birimi, dosya_yolu, proje_id, departman) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *",
+      "INSERT INTO satin_alma (talep_eden_id, baslik, aciklama, tutar, para_birimi, dosya_yolu, proje_id, departman, durum, finans_onayi, genel_mudur_onayi) VALUES ($1,$2,$3,$4,$5,$6,$7,$8, 'Finans Onayı Bekliyor', false, false) RETURNING *",
       [
-        talep_eden,
+        talep_eden_id,
         baslik,
         aciklama,
         tutar,
@@ -94,22 +99,46 @@ router.post("/", upload.single("dosya"), async (req, res) => {
       ]
     );
 
+    // B. Bildirim: Finans Ekibine (İsim ile Gönderiyoruz)
+    // Finans/Muhasebe departmanındaki kişilerin adlarını bul
+    const finanscilar = await pool.query(
+      "SELECT ad_soyad FROM kullanicilar WHERE departman = 'Muhasebe' OR departman = 'Finans'"
+    );
+
+    for (let f of finanscilar.rows) {
+      // HATA DÜZELTİLDİ: kime_id yerine kime (string) kullanıyoruz.
+      await pool.query(
+        "INSERT INTO bildirimler (mesaj, kime) VALUES ($1, $2)",
+        [`💰 Yeni Satın Alma Talebi: ${baslik}`, f.ad_soyad]
+      );
+    }
+
+    // Opsiyonel: Genel Müdüre de atılabilir
+    const gmler = await pool.query(
+      "SELECT ad_soyad FROM kullanicilar WHERE rol = 'Genel Müdür'"
+    );
+    for (let gm of gmler.rows) {
+      await pool.query(
+        "INSERT INTO bildirimler (mesaj, kime) VALUES ($1, $2)",
+        [`💰 Yeni Satın Alma Talebi: ${baslik}`, gm.ad_soyad]
+      );
+    }
+
     res.json(result.rows[0]);
   } catch (err) {
-    console.error(err);
+    console.error("SATIN ALMA EKLEME HATASI:", err);
     res.status(500).send("Hata");
   }
 });
 
 // ==========================================
-// 3. ONAY SİSTEMİ (Finans → GM → Final)
+// 3. ONAY SİSTEMİ
 // ==========================================
 router.put("/onay/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { onaylayan_rol, islem } = req.body;
 
-    // Kayıt getir
     const kayitSorgu = await pool.query(
       "SELECT * FROM satin_alma WHERE id = $1",
       [id]
@@ -120,9 +149,14 @@ router.put("/onay/:id", async (req, res) => {
     let finansOnayi = kayit.finans_onayi;
     let gmOnayi = kayit.genel_mudur_onayi;
 
-    // -----------------------------------------
-    // SENARYO A: REDDEDİLDİ
-    // -----------------------------------------
+    // Limit Kontrolü
+    const tutar = parseFloat(kayit.tutar);
+    const birim = kayit.para_birimi;
+    let limitAsildi = false;
+    if (birim === "TL" && tutar > 10000) limitAsildi = true;
+    else if (birim === "USD" && tutar > 250) limitAsildi = true;
+    else if (birim === "EUR" && tutar > 200) limitAsildi = true;
+
     if (islem === "Reddet") {
       yeniDurum = "Reddedildi";
       if (
@@ -130,42 +164,60 @@ router.put("/onay/:id", async (req, res) => {
         onaylayan_rol.includes("Muhasebe")
       )
         finansOnayi = false;
-
       if (onaylayan_rol.includes("Genel Müdür")) gmOnayi = false;
-    }
-
-    // -----------------------------------------
-    // SENARYO B: ONAYLANDI
-    // -----------------------------------------
-    else if (islem === "Onayla") {
-      // Finans / Muhasebe onayı
+    } else if (islem === "Onayla") {
       if (
         onaylayan_rol.includes("Finans") ||
-        onaylayan_rol.includes("Muhasebe")
+        onaylayan_rol.includes("Muhasebe") ||
+        onaylayan_rol.includes("Departman Müdürü")
       ) {
         finansOnayi = true;
-
-        // 10.000 TL altı → direkt onay
-        if (parseFloat(kayit.tutar) <= 10000) {
-          yeniDurum = "Onaylandı (Satın Alınacak)";
-        } else {
-          // 10.000 üstü → GM onayı gerekir
+        if (limitAsildi) {
           yeniDurum = "Genel Müdür Onayı Bekliyor";
+          // GM'ye Bildirim (İsim ile)
+          const gmler = await pool.query(
+            "SELECT ad_soyad FROM kullanicilar WHERE rol = 'Genel Müdür'"
+          );
+          for (let gm of gmler.rows) {
+            await pool.query(
+              "INSERT INTO bildirimler (mesaj, kime) VALUES ($1, $2)",
+              [`📝 GM Onayı Gereken Satın Alma: ${kayit.baslik}`, gm.ad_soyad]
+            );
+          }
+        } else {
+          yeniDurum = "Onaylandı (Satın Alınacak)";
         }
       }
-
-      // Genel Müdür onayı
       if (onaylayan_rol.includes("Genel Müdür")) {
         gmOnayi = true;
+        finansOnayi = true;
         yeniDurum = "Onaylandı (Satın Alınacak)";
       }
     }
 
-    // Final update
     await pool.query(
       "UPDATE satin_alma SET durum=$1, finans_onayi=$2, genel_mudur_onayi=$3 WHERE id=$4",
       [yeniDurum, finansOnayi, gmOnayi, id]
     );
+
+    // Talep Edene Bildirim (İsim bularak)
+    const talepEdenId = kayit.talep_eden_id;
+    if (talepEdenId) {
+      const userRes = await pool.query(
+        "SELECT ad_soyad FROM kullanicilar WHERE id=$1",
+        [talepEdenId]
+      );
+      if (userRes.rows.length > 0) {
+        const adSoyad = userRes.rows[0].ad_soyad;
+        let msg = yeniDurum.includes("Onaylandı")
+          ? `✅ Satın alma onaylandı: ${kayit.baslik}`
+          : `👍 Durum: ${yeniDurum}`;
+        await pool.query(
+          "INSERT INTO bildirimler (mesaj, kime) VALUES ($1, $2)",
+          [msg, adSoyad]
+        );
+      }
+    }
 
     res.json({ message: "İşlem Başarılı" });
   } catch (err) {

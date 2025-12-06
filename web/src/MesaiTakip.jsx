@@ -9,7 +9,8 @@ import {
   Col,
   message,
   Alert,
-  Spin,
+  DatePicker,
+  Space,
 } from "antd";
 import {
   PlayCircleOutlined,
@@ -17,9 +18,12 @@ import {
   ClockCircleOutlined,
   HistoryOutlined,
   CalendarOutlined,
+  DownloadOutlined,
+  TeamOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import duration from "dayjs/plugin/duration";
+import * as XLSX from "xlsx"; // Excel için
 
 dayjs.extend(duration);
 
@@ -32,30 +36,47 @@ export default function MesaiTakip({ aktifKullanici }) {
   const [gecenSure, setGecenSure] = useState("00:00:00");
   const [yukleniyor, setYukleniyor] = useState(false);
 
+  // Raporlama State'i
+  const [secilenAy, setSecilenAy] = useState(dayjs()); // Varsayılan: Bu ay
+
   const timerRef = useRef(null);
 
-  // Yönetici mi?
   const yoneticiMi = ["Genel Müdür", "İnsan Kaynakları", "Yönetim"].includes(
     aktifKullanici.rol
   );
 
+  // --- DURUM & GEÇMİŞ YÜKLEME + GLOBAL EVENT DİNLEYİCİSİ ---
   useEffect(() => {
+    if (!aktifKullanici) return;
+
+    const handleMesaiDegisti = (e) => {
+      // Eğer başka kullanıcının event'i ise ignore
+      if (e.detail?.userId && e.detail.userId !== aktifKullanici.id) return;
+      durumKontrol();
+      gecmisCek();
+    };
+
+    // İlk yüklemede çek
     durumKontrol();
     gecmisCek();
 
-    return () => clearInterval(timerRef.current);
-  }, []);
+    // Event dinleyicisi
+    window.addEventListener("mesaiDegisti", handleMesaiDegisti);
 
-  // Sayaç Mantığı
+    return () => {
+      window.removeEventListener("mesaiDegisti", handleMesaiDegisti);
+      clearInterval(timerRef.current);
+    };
+  }, [aktifKullanici?.id]);
+
+  // Sayaç
   useEffect(() => {
     if (iceride && baslangicZamani) {
       timerRef.current = setInterval(() => {
-        const simdi = dayjs();
-        const baslama = dayjs(baslangicZamani);
-        const fark = simdi.diff(baslama); // Milisaniye
+        const fark = dayjs().diff(dayjs(baslangicZamani));
         const sure = dayjs.duration(fark);
 
-        // Formatlama: HH:mm:ss
+        // duration.format kullanıyorsan ilgili plugin’i eklediğini varsayıyorum
         const saat = String(Math.floor(sure.asHours())).padStart(2, "0");
         const dakika = String(sure.minutes()).padStart(2, "0");
         const saniye = String(sure.seconds()).padStart(2, "0");
@@ -70,25 +91,32 @@ export default function MesaiTakip({ aktifKullanici }) {
   }, [iceride, baslangicZamani]);
 
   const durumKontrol = async () => {
-    const res = await fetch(
-      `${API_URL}/mesai/durum?userId=${aktifKullanici.id}`
-    );
-    const data = await res.json();
-    if (data.iceride) {
-      setIceride(true);
-      setBaslangicZamani(data.kayit.baslangic);
-    } else {
-      setIceride(false);
-      setBaslangicZamani(null);
+    try {
+      const res = await fetch(
+        `${API_URL}/mesai/durum?userId=${aktifKullanici.id}`
+      );
+      const data = await res.json();
+      if (data.iceride) {
+        setIceride(true);
+        setBaslangicZamani(data.kayit.baslangic);
+      } else {
+        setIceride(false);
+        setBaslangicZamani(null);
+      }
+    } catch (err) {
+      console.error(err);
     }
   };
 
   const gecmisCek = async () => {
-    // Yönetici ise herkesi görsün, değilse sadece kendini (tumu=true/false)
-    const url = `${API_URL}/mesai/gecmis?userId=${aktifKullanici.id}&tumu=${yoneticiMi}`;
-    const res = await fetch(url);
-    const data = await res.json();
-    setGecmis(data);
+    try {
+      const url = `${API_URL}/mesai/gecmis?userId=${aktifKullanici.id}&tumu=${yoneticiMi}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      setGecmis(data);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const girisYap = async () => {
@@ -98,15 +126,22 @@ export default function MesaiTakip({ aktifKullanici }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId: aktifKullanici.id,
-        aciklama: "Web üzerinden giriş",
+        aciklama: "Web giriş",
       }),
     });
     if (res.ok) {
-      message.success("Mesai Başlatıldı! İyi çalışmalar ☕");
       const data = await res.json();
       setBaslangicZamani(data.baslangic);
       setIceride(true);
       gecmisCek();
+      message.success("Mesai Başlatıldı!");
+
+      // Diğer componentlere haber ver
+      window.dispatchEvent(
+        new CustomEvent("mesaiDegisti", {
+          detail: { userId: aktifKullanici.id },
+        })
+      );
     }
     setYukleniyor(false);
   };
@@ -119,21 +154,47 @@ export default function MesaiTakip({ aktifKullanici }) {
       body: JSON.stringify({ userId: aktifKullanici.id }),
     });
     if (res.ok) {
-      message.success("Mesai Bitirildi. İyi dinlenmeler 🏠");
       setIceride(false);
       setBaslangicZamani(null);
       gecmisCek();
+      message.success("Mesai Bitirildi. İyi dinlenmeler!");
+
+      // Diğer componentlere haber ver
+      window.dispatchEvent(
+        new CustomEvent("mesaiDegisti", {
+          detail: { userId: aktifKullanici.id },
+        })
+      );
     }
     setYukleniyor(false);
   };
 
+  // --- EXCEL RAPORU ALMA ---
+  const raporIndir = async () => {
+    if (!yoneticiMi) return message.warning("Yetkiniz yok");
+
+    const ayStr = secilenAy.format("YYYY-MM");
+    message.loading("Rapor hazırlanıyor...", 1);
+
+    try {
+      const res = await fetch(`${API_URL}/mesai/rapor?ay=${ayStr}`);
+      const data = await res.json();
+
+      if (data.length === 0) return message.info("Bu ay için veri yok.");
+
+      const worksheet = XLSX.utils.json_to_sheet(data);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Puantaj");
+
+      XLSX.writeFile(workbook, `Puantaj_Raporu_${ayStr}.xlsx`);
+      message.success("Rapor indirildi!");
+    } catch (error) {
+      message.error("Rapor alınamadı.");
+    }
+  };
+
   const columns = [
-    {
-      title: "Personel",
-      dataIndex: "ad_soyad",
-      key: "ad_soyad",
-      render: (t) => <b>{t}</b>,
-    },
+    { title: "Personel", dataIndex: "ad_soyad", render: (t) => <b>{t}</b> },
     {
       title: "Tarih",
       dataIndex: "tarih",
@@ -158,31 +219,27 @@ export default function MesaiTakip({ aktifKullanici }) {
       title: "Süre",
       dataIndex: "sure_dakika",
       render: (dk) => {
-        const saat = Math.floor(dk / 60);
-        const dakika = dk % 60;
-        return dk > 0 ? `${saat}s ${dakika}dk` : "-";
+        const s = Math.floor(dk / 60);
+        const d = dk % 60;
+        return dk > 0 ? `${s}s ${d}dk` : "-";
       },
     },
     {
       title: "Durum",
       dataIndex: "mesai_turu",
-      render: (t) =>
-        t === "Fazla Mesai" ? (
-          <Tag color="purple">Fazla Mesai</Tag>
-        ) : (
-          <Tag color="default">Normal</Tag>
-        ),
+      render: (t) => (
+        <Tag color={t === "Fazla Mesai" ? "purple" : "default"}>{t}</Tag>
+      ),
     },
   ];
 
-  // Sadece yönetici sütununda personeli gösterelim, personel kendi ekranında zaten biliyor
   const finalColumns = yoneticiMi
     ? columns
     : columns.filter((c) => c.dataIndex !== "ad_soyad");
 
   return (
     <div>
-      {/* KONTROL PANELİ */}
+      {/* ÜST BİLGİ KARTLARI */}
       <Row gutter={16} style={{ marginBottom: 20 }}>
         <Col span={8}>
           <Card
@@ -196,17 +253,26 @@ export default function MesaiTakip({ aktifKullanici }) {
             }}
           >
             <Statistic
-              title="Şu Anki Durum"
+              title="Canlı Durum"
               value={iceride ? "Çalışıyor" : "Mesaide Değil"}
-              valueStyle={{ color: iceride ? "#3f8600" : "#cf1322" }}
-              prefix={iceride ? <ClockCircleOutlined /> : <CalendarOutlined />}
+              valueStyle={{
+                color: iceride ? "#3f8600" : "#cf1322",
+                fontWeight: "bold",
+              }}
+              prefix={
+                iceride ? <ClockCircleOutlined spin /> : <CalendarOutlined />
+              }
             />
           </Card>
         </Col>
 
         <Col span={8}>
           <Card bordered={false} style={{ textAlign: "center" }}>
-            <Statistic title="Geçen Süre (Bugün)" value={gecenSure} />
+            <Statistic
+              title="Bugünkü Çalışma Süresi"
+              value={gecenSure}
+              valueStyle={{ fontFamily: "monospace" }}
+            />
             <div style={{ marginTop: 15 }}>
               {!iceride ? (
                 <Button
@@ -219,9 +285,10 @@ export default function MesaiTakip({ aktifKullanici }) {
                     backgroundColor: "#52c41a",
                     borderColor: "#52c41a",
                     width: "100%",
+                    fontWeight: "bold",
                   }}
                 >
-                  GÜNE BAŞLA
+                  MESAİYE BAŞLA
                 </Button>
               ) : (
                 <Button
@@ -231,9 +298,9 @@ export default function MesaiTakip({ aktifKullanici }) {
                   icon={<PauseCircleOutlined />}
                   onClick={cikisYap}
                   loading={yukleniyor}
-                  style={{ width: "100%" }}
+                  style={{ width: "100%", fontWeight: "bold" }}
                 >
-                  GÜNÜ BİTİR
+                  MESAİYİ BİTİR
                 </Button>
               )}
             </div>
@@ -241,13 +308,48 @@ export default function MesaiTakip({ aktifKullanici }) {
         </Col>
 
         <Col span={8}>
-          <Card bordered={false}>
-            <Alert
-              message="Hatırlatma"
-              description="Mesai giriş ve çıkışlarınızı zamanında yapmanız, maaş ve prim hesaplamaları için önemlidir."
-              type="info"
-              showIcon
-            />
+          <Card
+            bordered={false}
+            title="Aylık Rapor & İşlemler"
+            extra={<TeamOutlined />}
+          >
+            {yoneticiMi ? (
+              <div
+                style={{ display: "flex", flexDirection: "column", gap: 10 }}
+              >
+                <div style={{ fontSize: 12, color: "#888" }}>
+                  Dönem Seçiniz:
+                </div>
+                <Space>
+                  <DatePicker
+                    picker="month"
+                    value={secilenAy}
+                    onChange={setSecilenAy}
+                    allowClear={false}
+                    style={{ width: "100%" }}
+                  />
+                  <Button
+                    type="default"
+                    icon={<DownloadOutlined />}
+                    onClick={raporIndir}
+                  >
+                    İndir
+                  </Button>
+                </Space>
+                <Alert
+                  message="Puantaj özeti Excel olarak indirilir."
+                  type="info"
+                  style={{ fontSize: 11 }}
+                />
+              </div>
+            ) : (
+              <Alert
+                message="Bilgilendirme"
+                description="Giriş çıkışlarınız otomatik olarak IK sistemine işlenmektedir."
+                type="success"
+                showIcon
+              />
+            )}
           </Card>
         </Col>
       </Row>
@@ -256,8 +358,8 @@ export default function MesaiTakip({ aktifKullanici }) {
       <Card
         title={
           <span>
-            <HistoryOutlined /> Mesai Hareketleri (
-            {yoneticiMi ? "Tüm Ekip" : "Geçmişim"})
+            <HistoryOutlined /> Hareket Kayıtları (
+            {yoneticiMi ? "Tüm Personel" : "Şahsi"})
           </span>
         }
       >
@@ -265,7 +367,8 @@ export default function MesaiTakip({ aktifKullanici }) {
           dataSource={gecmis}
           columns={finalColumns}
           rowKey="id"
-          pagination={{ pageSize: 7 }}
+          pagination={{ pageSize: 8 }}
+          size="middle"
         />
       </Card>
     </div>

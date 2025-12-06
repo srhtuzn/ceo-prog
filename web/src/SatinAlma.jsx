@@ -48,12 +48,10 @@ export default function SatinAlma({ aktifKullanici }) {
 
   const veriCek = () => {
     setYukleniyor(true);
-    // YENİ ADRES: /satin-alma yerine /finans
     fetch(`${API_URL}/finans?userId=${aktifKullanici.id}`)
       .then((res) => res.json())
       .then((data) => {
-        if (Array.isArray(data)) setTalepler(data);
-        else setTalepler([]);
+        setTalepler(Array.isArray(data) ? data : []);
         setYukleniyor(false);
       })
       .catch(() => {
@@ -63,7 +61,6 @@ export default function SatinAlma({ aktifKullanici }) {
   };
 
   const projeCek = () => {
-    // YENİ ADRES: /projeler yerine /gorevler/projeler
     fetch(`${API_URL}/gorevler/projeler`)
       .then((res) => res.json())
       .then((data) => {
@@ -74,7 +71,8 @@ export default function SatinAlma({ aktifKullanici }) {
   const filtrelenmisTalepler = talepler.filter((talep) => {
     const metinUyumu =
       talep.baslik.toLowerCase().includes(aramaMetni.toLowerCase()) ||
-      talep.talep_eden.toLowerCase().includes(aramaMetni.toLowerCase());
+      (talep.talep_eden &&
+        talep.talep_eden.toLowerCase().includes(aramaMetni.toLowerCase()));
     const departmanUyumu = filtreDepartman
       ? talep.departman === filtreDepartman
       : true;
@@ -84,20 +82,17 @@ export default function SatinAlma({ aktifKullanici }) {
 
   const formGonder = (degerler) => {
     const formData = new FormData();
-    formData.append("talep_eden", aktifKullanici.ad_soyad);
+    formData.append("talep_eden_id", aktifKullanici.id);
     formData.append("baslik", degerler.baslik);
     formData.append("aciklama", degerler.aciklama || "");
     formData.append("tutar", degerler.tutar);
     formData.append("para_birimi", degerler.para_birimi);
-
     formData.append("departman", degerler.departman);
     if (degerler.proje_id) formData.append("proje_id", degerler.proje_id);
-
     if (degerler.dosya && degerler.dosya.length > 0) {
       formData.append("dosya", degerler.dosya[0].originFileObj);
     }
 
-    // YENİ ADRES
     fetch(`${API_URL}/finans`, { method: "POST", body: formData })
       .then((res) => res.json())
       .then(() => {
@@ -111,7 +106,6 @@ export default function SatinAlma({ aktifKullanici }) {
 
   const onaylaReddet = (id, islem) => {
     const rol = aktifKullanici?.rol || "";
-    // YENİ ADRES
     fetch(`${API_URL}/finans/onay/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -133,9 +127,9 @@ export default function SatinAlma({ aktifKullanici }) {
       title: "Proje",
       dataIndex: "proje_id",
       render: (pid) => {
-        const proje = projeler.find((p) => p.id === pid);
-        return proje ? (
-          <Tag color="cyan">{proje.ad}</Tag>
+        const p = projeler.find((x) => x.id === pid);
+        return p ? (
+          <Tag color="cyan">{p.ad}</Tag>
         ) : (
           <Text type="secondary">-</Text>
         );
@@ -181,48 +175,50 @@ export default function SatinAlma({ aktifKullanici }) {
       title: "İşlem",
       render: (_, r) => {
         const rol = aktifKullanici?.rol || "";
+        const isFinans = rol.includes("Muhasebe") || rol.includes("Finans");
+        const isGM = rol.includes("Genel Müdür");
+
         return (
           <Space>
-            {(rol.includes("Muhasebe") ||
-              rol.includes("Finans") ||
-              rol.includes("Genel Müdür")) &&
-              r.durum === "Finans Onayı Bekliyor" && (
-                <>
-                  <Button
-                    size="small"
-                    type="primary"
-                    onClick={() => onaylaReddet(r.id, "Onayla")}
-                  >
-                    Onayla
-                  </Button>
-                  <Button
-                    size="small"
-                    danger
-                    onClick={() => onaylaReddet(r.id, "Reddet")}
-                  >
-                    Reddet
-                  </Button>
-                </>
-              )}
-            {rol.includes("Genel Müdür") &&
-              r.durum === "Genel Müdür Onayı Bekliyor" && (
-                <>
-                  <Button
-                    size="small"
-                    type="primary"
-                    onClick={() => onaylaReddet(r.id, "Onayla")}
-                  >
-                    GM Onayı Ver
-                  </Button>
-                  <Button
-                    size="small"
-                    danger
-                    onClick={() => onaylaReddet(r.id, "Reddet")}
-                  >
-                    Reddet
-                  </Button>
-                </>
-              )}
+            {/* Finans Onayı Beklerken: Finansçı veya GM işlem yapabilir */}
+            {r.durum === "Finans Onayı Bekliyor" && (isFinans || isGM) && (
+              <>
+                <Button
+                  size="small"
+                  type="primary"
+                  onClick={() => onaylaReddet(r.id, "Onayla")}
+                >
+                  {isGM ? "Direkt Onayla" : "Onayla"}
+                </Button>
+                <Button
+                  size="small"
+                  danger
+                  onClick={() => onaylaReddet(r.id, "Reddet")}
+                >
+                  Reddet
+                </Button>
+              </>
+            )}
+
+            {/* GM Onayı Beklerken: Sadece GM işlem yapabilir */}
+            {r.durum === "Genel Müdür Onayı Bekliyor" && isGM && (
+              <>
+                <Button
+                  size="small"
+                  type="primary"
+                  onClick={() => onaylaReddet(r.id, "Onayla")}
+                >
+                  GM Onayı Ver
+                </Button>
+                <Button
+                  size="small"
+                  danger
+                  onClick={() => onaylaReddet(r.id, "Reddet")}
+                >
+                  Reddet
+                </Button>
+              </>
+            )}
           </Space>
         );
       },
@@ -252,19 +248,18 @@ export default function SatinAlma({ aktifKullanici }) {
           }}
         >
           <Input
-            placeholder="Ara (Talep Eden, Ürün)..."
+            placeholder="Ara..."
             prefix={<SearchOutlined style={{ color: "#ccc" }} />}
             style={{ width: 250 }}
             value={aramaMetni}
             onChange={(e) => setAramaMetni(e.target.value)}
             allowClear
           />
-
           <Select
-            placeholder="Departman Seç"
+            placeholder="Departman"
             style={{ width: 150 }}
             allowClear
-            onChange={(val) => setFiltreDepartman(val)}
+            onChange={setFiltreDepartman}
             value={filtreDepartman}
           >
             <Option value="Bilgi İşlem">Bilgi İşlem</Option>
@@ -272,12 +267,11 @@ export default function SatinAlma({ aktifKullanici }) {
             <Option value="Satış">Satış</Option>
             <Option value="Yönetim">Yönetim</Option>
           </Select>
-
           <Select
-            placeholder="Proje Seç"
+            placeholder="Proje"
             style={{ width: 200 }}
             allowClear
-            onChange={(val) => setFiltreProje(val)}
+            onChange={setFiltreProje}
             value={filtreProje}
           >
             {projeler.map((p) => (
@@ -286,7 +280,6 @@ export default function SatinAlma({ aktifKullanici }) {
               </Option>
             ))}
           </Select>
-
           <Button
             icon={<FilterOutlined />}
             onClick={() => {
@@ -298,7 +291,6 @@ export default function SatinAlma({ aktifKullanici }) {
             Temizle
           </Button>
         </div>
-
         <Table
           dataSource={filtrelenmisTalepler}
           columns={columns}
@@ -343,7 +335,6 @@ export default function SatinAlma({ aktifKullanici }) {
               </Select>
             </Form.Item>
           </div>
-
           <Form.Item
             name="baslik"
             label="Ürün/Hizmet Adı"
@@ -380,10 +371,7 @@ export default function SatinAlma({ aktifKullanici }) {
             name="dosya"
             label="Proforma / Teklif (PDF)"
             valuePropName="fileList"
-            getValueFromEvent={(e) => {
-              if (Array.isArray(e)) return e;
-              return e && e.fileList;
-            }}
+            getValueFromEvent={(e) => (Array.isArray(e) ? e : e && e.fileList)}
           >
             <Upload maxCount={1} beforeUpload={() => false}>
               <Button icon={<UploadOutlined />}>Dosya Seç</Button>

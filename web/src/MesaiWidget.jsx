@@ -13,7 +13,7 @@ import {
   PlayCircleOutlined,
   PauseCircleOutlined,
   CoffeeOutlined,
-  SyncOutlined, // <-- IMPORT BURAYA EKLENDİ
+  SyncOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import duration from "dayjs/plugin/duration";
@@ -32,11 +32,23 @@ export default function MesaiWidget({ aktifKullanici }) {
 
   const timerRef = useRef(null);
 
+  // DURUM KONTROL + GLOBAL EVENT DİNLE
   useEffect(() => {
-    if (aktifKullanici) {
+    if (!aktifKullanici) return;
+
+    const handleMesaiDegisti = (e) => {
+      if (e.detail?.userId && e.detail.userId !== aktifKullanici.id) return;
       durumKontrol();
-    }
-    return () => clearInterval(timerRef.current);
+    };
+
+    durumKontrol();
+
+    window.addEventListener("mesaiDegisti", handleMesaiDegisti);
+
+    return () => {
+      window.removeEventListener("mesaiDegisti", handleMesaiDegisti);
+      clearInterval(timerRef.current);
+    };
   }, [aktifKullanici]);
 
   // Sayaç Mantığı
@@ -87,7 +99,7 @@ export default function MesaiWidget({ aktifKullanici }) {
 
     try {
       const res = await fetch(`${API_URL}${endpoint}`, {
-        method: method,
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: aktifKullanici.id,
@@ -98,15 +110,22 @@ export default function MesaiWidget({ aktifKullanici }) {
       if (res.ok) {
         const data = await res.json();
         if (tip === "giris") {
-          message.success("Mesai Başlatıldı! Kolay gelsin. 🚀");
+          message.success("Mesai Başlatıldı! Kolay gelsin.");
           setBaslangicZamani(data.baslangic);
           setIceride(true);
         } else {
-          message.success("Mesai Bitirildi. İyi dinlenmeler! 🏠");
+          message.success("Mesai Bitirildi. İyi dinlenmeler!");
           setIceride(false);
           setBaslangicZamani(null);
           setAcik(false);
         }
+
+        // Global event: sayfa vs diğer bileşenler güncellensin
+        window.dispatchEvent(
+          new CustomEvent("mesaiDegisti", {
+            detail: { userId: aktifKullanici.id },
+          })
+        );
       } else {
         message.error("İşlem başarısız oldu.");
       }

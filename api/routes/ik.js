@@ -15,11 +15,9 @@ router.get("/kullanicilar", async (req, res) => {
     );
     let users = result.rows;
 
-    // 2. Kritik Rolleri Bul (Referans Noktaları)
-    // Genel Müdür (Birden fazla varsa ilkini al, yoksa null)
+    // 2. Kritik Rolleri Bul
     const genelMudur = users.find((u) => u.rol === "Genel Müdür");
 
-    // Departman Müdürleri Haritası (Örn: { 'Bilgi İşlem': UserObj, 'Muhasebe': UserObj })
     const deptMudurleri = {};
     users.forEach((u) => {
       if (u.rol === "Departman Müdürü") {
@@ -29,34 +27,46 @@ router.get("/kullanicilar", async (req, res) => {
 
     // 3. Hiyerarşiyi Hesapla (Mapping)
     const computedUsers = users.map((user) => {
-      // A. Manuel atama varsa onu kullan (Override)
+      // A. Manuel atama varsa onu kullan
       if (user.yonetici_id) {
-        return { ...user, parent_id: user.yonetici_id };
+        const yonetici = users.find((u) => u.id === user.yonetici_id);
+        return {
+          ...user,
+          parent_id: user.yonetici_id,
+          yonetici_adi: yonetici ? yonetici.ad_soyad : "-",
+        };
       }
 
       // B. Rol Bazlı Otomatik Atama
       if (user.rol === "Genel Müdür") {
-        // En tepe (Parent yok)
-        return { ...user, parent_id: null };
+        return { ...user, parent_id: null, yonetici_adi: "-" };
       }
 
       if (user.rol === "Departman Müdürü") {
-        // Müdüre -> Genel Müdür bakar
-        return { ...user, parent_id: genelMudur ? genelMudur.id : null };
+        return {
+          ...user,
+          parent_id: genelMudur ? genelMudur.id : null,
+          yonetici_adi: genelMudur ? genelMudur.ad_soyad : "-",
+        };
       }
 
       if (user.rol === "Personel" || user.rol === "Süpervizör") {
-        // Personele -> Kendi Departman Müdürü bakar
         const myManager = deptMudurleri[user.departman];
         if (myManager) {
-          return { ...user, parent_id: myManager.id };
+          return {
+            ...user,
+            parent_id: myManager.id,
+            yonetici_adi: myManager.ad_soyad,
+          };
         } else {
-          // Müdürü yoksa -> Genel Müdüre bağlanır
-          return { ...user, parent_id: genelMudur ? genelMudur.id : null };
+          return {
+            ...user,
+            parent_id: genelMudur ? genelMudur.id : null,
+            yonetici_adi: genelMudur ? genelMudur.ad_soyad : "-",
+          };
         }
       }
 
-      // Tanımsız rol ise boşa düşsün (veya GM'ye bağla)
       return { ...user, parent_id: genelMudur ? genelMudur.id : null };
     });
 
@@ -102,20 +112,15 @@ router.delete("/kullanicilar/:id", async (req, res) => {
   }
 });
 
-// Yönetici ata (DÖNGÜ KONTROLÜ EKLENDİ 🛡️)
+// Yönetici ata
 router.put("/kullanicilar/yonetici-ata/:id", async (req, res) => {
   try {
-    const { id } = req.params; // Personel ID
-    const { yonetici_id } = req.body; // Atanacak Yönetici ID
+    const { id } = req.params;
+    const { yonetici_id } = req.body;
 
-    // 1. Kendi kendine atamayı engelle
     if (parseInt(id) === parseInt(yonetici_id)) {
       return res.status(400).json({ error: "Kişi kendi yöneticisi olamaz!" });
     }
-
-    // 2. (Opsiyonel ama İleri Seviye) Döngü Kontrolü:
-    // Eğer A, B'nin yöneticisiyse; B, A'nın yöneticisi olamaz.
-    // Bu kontrol veritabanında recursive query gerektirir, şimdilik basit tutuyoruz.
 
     await pool.query("UPDATE kullanicilar SET yonetici_id = $1 WHERE id = $2", [
       yonetici_id,
@@ -146,12 +151,13 @@ router.put("/kullanicilar/yonetici-sil/:id", async (req, res) => {
 // İZİN YÖNETİMİ
 // ==========================================
 
-// 1. İzin Listele (GİZLİLİK EKLİ 🔒)
+// 1. İzin Listele (JOIN EKLENDİ 🔗)
 router.get("/izinler", async (req, res) => {
   try {
     const { userId } = req.query;
+    // Rol kontrolü için kullanıcıyı çek
     const userRes = await pool.query(
-      "SELECT rol, ad_soyad FROM kullanicilar WHERE id = $1",
+      "SELECT rol, id FROM kullanicilar WHERE id = $1",
       [userId]
     );
 
@@ -161,7 +167,7 @@ router.get("/izinler", async (req, res) => {
     let query = "";
     let params = [];
 
-    // Yönetici Roller HERKESİ görür
+    // Yönetici Roller (Herkesi görür)
     if (
       [
         "Genel Müdür",
@@ -171,12 +177,22 @@ router.get("/izinler", async (req, res) => {
         "Süpervizör",
       ].some((r) => user.rol.includes(r))
     ) {
-      query = "SELECT * FROM izinler ORDER BY baslangic_tarihi DESC";
+      query = `
+        SELECT i.*, k.ad_soyad as talep_eden 
+        FROM izinler i
+        LEFT JOIN kullanicilar k ON i.talep_eden_id = k.id 
+        ORDER BY i.baslangic_tarihi DESC
+      `;
     } else {
-      // Personel SADECE KENDİNİ görür
-      query =
-        "SELECT * FROM izinler WHERE talep_eden = $1 ORDER BY baslangic_tarihi DESC";
-      params = [user.ad_soyad];
+      // Personel (Sadece kendini görür)
+      query = `
+        SELECT i.*, k.ad_soyad as talep_eden 
+        FROM izinler i
+        LEFT JOIN kullanicilar k ON i.talep_eden_id = k.id
+        WHERE i.talep_eden_id = $1 
+        ORDER BY i.baslangic_tarihi DESC
+      `;
+      params = [userId];
     }
 
     const result = await pool.query(query, params);
@@ -187,11 +203,11 @@ router.get("/izinler", async (req, res) => {
   }
 });
 
-// 2. Yeni İzin Talebi (AKILLI BİLDİRİM 🧠)
+// 2. Yeni İzin Talebi (ID KAYIT & İSİM BİLDİRİM 🧠)
 router.post("/izinler", async (req, res) => {
   try {
     const {
-      ad_soyad,
+      talep_eden_id,
       baslangic_tarihi,
       bitis_tarihi,
       aciklama,
@@ -199,19 +215,21 @@ router.post("/izinler", async (req, res) => {
       gun_sayisi,
     } = req.body;
 
-    // 1. Talep edenin departmanını bul
+    // 1. Talep edenin bilgilerini (Adı ve Departmanı) ID'den bul
     const userRes = await pool.query(
-      "SELECT departman FROM kullanicilar WHERE ad_soyad = $1",
-      [ad_soyad]
+      "SELECT ad_soyad, departman FROM kullanicilar WHERE id = $1",
+      [talep_eden_id]
     );
-    let departman = "Genel";
-    if (userRes.rows.length > 0) departman = userRes.rows[0].departman;
+    if (userRes.rows.length === 0)
+      return res.status(404).send("Kullanıcı bulunamadı");
 
-    // 2. İzin Kaydı
+    const { ad_soyad, departman } = userRes.rows[0];
+
+    // 2. İzni Kaydet (ID ile)
     const insert = await pool.query(
-      "INSERT INTO izinler (talep_eden, baslangic_tarihi, bitis_tarihi, aciklama, tur, durum, gun_sayisi, departman) VALUES ($1, $2, $3, $4, $5, 'Yönetici Onayı Bekliyor', $6, $7) RETURNING *",
+      "INSERT INTO izinler (talep_eden_id, baslangic_tarihi, bitis_tarihi, aciklama, tur, durum, gun_sayisi, departman) VALUES ($1, $2, $3, $4, $5, 'Yönetici Onayı Bekliyor', $6, $7) RETURNING *",
       [
-        ad_soyad,
+        talep_eden_id,
         baslangic_tarihi,
         bitis_tarihi,
         aciklama,
@@ -221,10 +239,10 @@ router.post("/izinler", async (req, res) => {
       ]
     );
 
-    // 3. Bildirim Gönder (Sadece İlgili Müdürlere ve GM'ye)
+    // 3. Bildirim Gönder (İsim kullanarak - çünkü bildirimler tablosu isim tutuyor)
     const bildirim = `📅 ${ad_soyad} (${departman}) izin talep etti. Onay bekleniyor.`;
 
-    // A. İlgili Departman Müdürleri
+    // A. Departman Müdürlerini bul
     const mudurler = await pool.query(
       "SELECT ad_soyad FROM kullanicilar WHERE departman = $1 AND rol = 'Departman Müdürü'",
       [departman]
@@ -236,7 +254,7 @@ router.post("/izinler", async (req, res) => {
       );
     }
 
-    // B. Genel Müdürler
+    // B. Genel Müdürleri bul
     const gmler = await pool.query(
       "SELECT ad_soyad FROM kullanicilar WHERE rol = 'Genel Müdür'"
     );
@@ -268,7 +286,7 @@ router.put("/izinler/iptal/:id", async (req, res) => {
   }
 });
 
-// 4. İzin Onay/Red
+// 4. İzin Onay/Red (ID -> İSİM DÖNÜŞÜMÜ)
 router.put("/izinler/onay/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -292,13 +310,19 @@ router.put("/izinler/onay/:id", async (req, res) => {
       id,
     ]);
 
-    // Talep sahibine bildirim
+    // Bildirim için talep edenin ADINI bul (ID'den)
     const izin = await pool.query(
-      "SELECT talep_eden FROM izinler WHERE id = $1",
+      `
+        SELECT i.talep_eden_id, u.ad_soyad 
+        FROM izinler i 
+        JOIN kullanicilar u ON i.talep_eden_id = u.id 
+        WHERE i.id = $1`,
       [id]
     );
+
     if (izin.rows.length > 0) {
-      const { talep_eden } = izin.rows[0];
+      const { ad_soyad } = izin.rows[0];
+
       let msj = "";
       if (yeniDurum === "Onaylandı") msj = `✅ İzin talebiniz ONAYLANDI.`;
       else if (yeniDurum === "Reddedildi")
@@ -306,12 +330,13 @@ router.put("/izinler/onay/:id", async (req, res) => {
       else if (yeniDurum.includes("Bekliyor"))
         msj = `👍 Yönetici onayladı, GM onayı bekleniyor.`;
 
+      // Bildirim tablosuna AD ile kayıt
       await pool.query(
         "INSERT INTO bildirimler (mesaj, kime) VALUES ($1, $2)",
-        [msj, talep_eden]
+        [msj, ad_soyad]
       );
 
-      // Eğer GM onayı bekliyorsa, GM'ye de bildirim at (Hatırlatma)
+      // Eğer GM onayı bekliyorsa, GM'ye de bildirim at
       if (yeniDurum.includes("Genel Müdür")) {
         const gmler = await pool.query(
           "SELECT ad_soyad FROM kullanicilar WHERE rol = 'Genel Müdür'"
@@ -320,7 +345,7 @@ router.put("/izinler/onay/:id", async (req, res) => {
           await pool.query(
             "INSERT INTO bildirimler (mesaj, kime) VALUES ($1, $2)",
             [
-              `📝 ${talep_eden} için yönetici onayı geldi. Son onay bekleniyor.`,
+              `📝 ${ad_soyad} için yönetici onayı geldi. Son onay bekleniyor.`,
               gm.ad_soyad,
             ]
           );
@@ -336,21 +361,22 @@ router.put("/izinler/onay/:id", async (req, res) => {
 });
 
 // 5. İzin Özeti (HESAPLAMA DÜZELTİLDİ ✅)
-router.get("/izinler/kullanilan/:ad_soyad", async (req, res) => {
+router.get("/izinler/kullanilan/:userId", async (req, res) => {
   try {
-    const { ad_soyad } = req.params;
+    const { userId } = req.params;
 
     // Kullanılan: Reddedilmemiş ve İptal Edilmemiş (Onaylı + Bekleyen) her şey
+    // talep_eden_id sütununu kullanıyoruz
     const kullanilanSorgu = await pool.query(
-      "SELECT SUM(gun_sayisi) as toplam FROM izinler WHERE talep_eden = $1 AND durum NOT IN ('Reddedildi', 'İptal Edildi')",
-      [ad_soyad]
+      "SELECT SUM(gun_sayisi) as toplam FROM izinler WHERE talep_eden_id = $1 AND durum NOT IN ('Reddedildi', 'İptal Edildi')",
+      [userId]
     );
     const kullanilan = parseInt(kullanilanSorgu.rows[0].toplam) || 0;
 
     // Toplam Hak
     const hakSorgu = await pool.query(
-      "SELECT toplam_izin_hakki FROM kullanicilar WHERE ad_soyad = $1",
-      [ad_soyad]
+      "SELECT toplam_izin_hakki FROM kullanicilar WHERE id = $1",
+      [userId]
     );
     const toplam_hak =
       hakSorgu.rows.length > 0 ? hakSorgu.rows[0].toplam_izin_hakki : 14;

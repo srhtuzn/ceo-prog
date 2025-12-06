@@ -18,7 +18,6 @@ import {
   Badge,
   Row,
   Col,
-  Progress,
   List,
   Checkbox,
   Avatar,
@@ -26,7 +25,6 @@ import {
   Calendar,
   Tooltip,
   Drawer,
-  Empty,
 } from "antd";
 import {
   PlusOutlined,
@@ -46,6 +44,10 @@ import {
   ClockCircleOutlined,
   DragOutlined,
   FolderAddOutlined,
+  FilePdfOutlined,
+  FileImageOutlined,
+  FileExcelOutlined,
+  FileOutlined,
 } from "@ant-design/icons";
 import {
   DndContext,
@@ -87,8 +89,26 @@ const COLUMN_STYLES = {
   },
 };
 
+// --- YARDIMCI: KULLANICI AVATARI BULMA ---
+// İsimden kullanıcıyı bulup avatar dosyasını gösterir, yoksa baş harf
+const getUserAvatar = (name, usersList = []) => {
+  const user = usersList.find((u) => u.ad_soyad === name);
+  if (user && user.avatar) {
+    return (
+      <Avatar src={`${API_URL}/uploads/${user.avatar}`}>
+        {user.ad_soyad?.[0]}
+      </Avatar>
+    );
+  }
+  return (
+    <Avatar style={{ backgroundColor: "#87d068" }}>
+      {name ? name[0] : "?"}
+    </Avatar>
+  );
+};
+
 // --- KANBAN KART ---
-const KanbanCard = ({ gorev, onClick }) => {
+const KanbanCard = ({ gorev, onClick, allUsers }) => {
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
       id: gorev.id.toString(),
@@ -170,15 +190,14 @@ const KanbanCard = ({ gorev, onClick }) => {
             alignItems: "center",
           }}
         >
-          <Avatar.Group maxCount={3} size="small">
+          <Avatar.Group max={{ count: 3 }} size="small">
             {gorev.atananlar?.map((k, i) => (
               <Tooltip title={k} key={i}>
-                <Avatar style={{ backgroundColor: "#87d068", fontSize: 10 }}>
-                  {k[0]}
-                </Avatar>
+                {getUserAvatar(k, allUsers)}
               </Tooltip>
             ))}
           </Avatar.Group>
+
           <Text type="secondary" style={{ fontSize: 10 }}>
             {dayjs(gorev.tarih).format("DD MMM")}
           </Text>
@@ -250,6 +269,18 @@ const KanbanColumn = ({ id, title, children }) => {
   );
 };
 
+// --- DOSYA İKONU ---
+const getFileIcon = (fileName) => {
+  if (!fileName) return <FileOutlined />;
+  if (fileName.endsWith(".pdf"))
+    return <FilePdfOutlined style={{ color: "red" }} />;
+  if (fileName.match(/\.(jpg|jpeg|png|gif)$/))
+    return <FileImageOutlined style={{ color: "purple" }} />;
+  if (fileName.match(/\.(xls|xlsx|csv)$/))
+    return <FileExcelOutlined style={{ color: "green" }} />;
+  return <FileOutlined />;
+};
+
 export default function GorevYonetimi({
   aktifKullanici,
   projeler = [],
@@ -276,6 +307,7 @@ export default function GorevYonetimi({
   const [seciliGunIsleri, setSeciliGunIsleri] = useState([]);
   const [seciliTarih, setSeciliTarih] = useState("");
   const [seciliGorev, setSeciliGorev] = useState(null);
+  const [seciliGorevDosyalari, setSeciliGorevDosyalari] = useState([]);
   const [altGorevler, setAltGorevler] = useState([]);
   const [yeniAltGorev, setYeniAltGorev] = useState("");
   const [yorumlar, setYorumlar] = useState([]);
@@ -299,6 +331,7 @@ export default function GorevYonetimi({
   useEffect(() => {
     veriCek();
   }, []);
+
   useEffect(() => {
     if (acilacakGorevId && gorevler.length > 0) {
       const hedef = gorevler.find((g) => g.id === acilacakGorevId);
@@ -320,9 +353,7 @@ export default function GorevYonetimi({
       });
   };
 
-  // --- HATA BURADAYDI: NULL CHECK EKLENDİ ---
   const filtrelenmisGorevler = gorevler.filter((gorev) => {
-    // (gorev.baslik || "") diyerek null gelirse boş string kullanıyoruz
     const metinUyumu =
       (gorev.baslik || "").toLowerCase().includes(aramaMetni.toLowerCase()) ||
       (gorev.aciklama || "").toLowerCase().includes(aramaMetni.toLowerCase());
@@ -337,6 +368,7 @@ export default function GorevYonetimi({
 
   const formGonder = (degerler) => {
     const fd = new FormData();
+    fd.append("olusturan_id", aktifKullanici.id);
     fd.append("baslik", degerler.baslik);
     fd.append("aciklama", degerler.aciklama || "");
     fd.append("oncelik", degerler.oncelik || "Orta");
@@ -366,11 +398,21 @@ export default function GorevYonetimi({
     const fd = new FormData();
     fd.append("baslik", v.baslik || seciliGorev.baslik);
     fd.append("aciklama", v.aciklama || "");
-    fd.append("oncelik", v.oncelik);
+    fd.append("oncelik", v.oncelik || seciliGorev.oncelik);
     fd.append("durum", seciliGorev.durum);
-    if (v.proje_id) fd.append("proje_id", v.proje_id);
+    fd.append("olusturan_id", aktifKullanici.id);
+
+    if (v.proje_id !== undefined) fd.append("proje_id", v.proje_id || "");
+    else if (seciliGorev.proje_id) fd.append("proje_id", seciliGorev.proje_id);
+
     if (v.tarih) fd.append("tarih", v.tarih.format("YYYY-MM-DD"));
-    fd.append("atananlar", JSON.stringify(v.atananlar || []));
+    else if (seciliGorev.tarih)
+      fd.append("tarih", dayjs(seciliGorev.tarih).format("YYYY-MM-DD"));
+
+    const atananlarFinal =
+      v.atananlar !== undefined ? v.atananlar : seciliGorev.atananlar || [];
+    fd.append("atananlar", JSON.stringify(atananlarFinal));
+
     if (v.dosya && v.dosya.length > 0) {
       v.dosya.forEach((fileItem) => {
         fd.append("dosyalar", fileItem.originFileObj);
@@ -388,12 +430,26 @@ export default function GorevYonetimi({
         prev.map((g) => (g.id === seciliGorev.id ? { ...g, ...guncel } : g))
       );
       setSeciliGorev({ ...seciliGorev, ...guncel });
+
+      const detayRes = await fetch(`${API_URL}/gorevler/${seciliGorev.id}`);
+      const detayData = await detayRes.json();
+      setSeciliGorevDosyalari(detayData.dosyalar || []);
+
       setDuzenlemeModu(false);
       message.success("Güncellendi");
     } catch (e) {
       message.error("Hata");
     } finally {
       setFormYukleniyor(false);
+    }
+  };
+
+  const handleEditClick = async () => {
+    try {
+      const values = await detayForm.validateFields();
+      gorevGuncelle(values);
+    } catch (errorInfo) {
+      message.error("Lütfen zorunlu alanları kontrol edin.");
     }
   };
 
@@ -419,16 +475,27 @@ export default function GorevYonetimi({
     });
   };
 
-  const detayAc = (kayit) => {
+  const detayAc = async (kayit) => {
     setSeciliGorev(kayit);
     setDetayModalAcik(true);
     setDuzenlemeModu(false);
+
+    detayForm.resetFields();
     detayForm.setFieldsValue({
       ...kayit,
       tarih: kayit.tarih ? dayjs(kayit.tarih) : null,
       atananlar: kayit.atananlar || [],
       proje_id: kayit.proje_id,
     });
+
+    try {
+      const res = await fetch(`${API_URL}/gorevler/${kayit.id}`);
+      const data = await res.json();
+      setSeciliGorevDosyalari(data.dosyalar || []);
+    } catch (e) {
+      setSeciliGorevDosyalari([]);
+    }
+
     fetch(`${API_URL}/gorevler/${kayit.id}/yorumlar`)
       .then((r) => r.json())
       .then(setYorumlar);
@@ -444,7 +511,7 @@ export default function GorevYonetimi({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         baslik: yeniAltGorev,
-        olusturan: aktifKullanici.ad_soyad,
+        olusturan_id: aktifKullanici.id,
       }),
     })
       .then((r) => r.json())
@@ -453,6 +520,7 @@ export default function GorevYonetimi({
         setYeniAltGorev("");
       });
   };
+
   const altGorevToggle = (id, d) => {
     fetch(`${API_URL}/alt-gorevler/${id}`, {
       method: "PUT",
@@ -464,27 +532,35 @@ export default function GorevYonetimi({
       );
     });
   };
+
   const altGorevSil = (id) => {
     fetch(`${API_URL}/alt-gorevler/${id}`, { method: "DELETE" }).then(() =>
       setAltGorevler(altGorevler.filter((a) => a.id !== id))
     );
   };
+
   const yorumGonder = () => {
     if (!yeniYorum) return;
     fetch(`${API_URL}/gorevler/${seciliGorev.id}/yorumlar`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        yazan_kisi: aktifKullanici.ad_soyad,
+        yazan_kisi_id: aktifKullanici.id,
         mesaj: yeniYorum,
       }),
     })
       .then((r) => r.json())
       .then((y) => {
-        setYorumlar([...yorumlar, y]);
+        const yeniYorumObj = {
+          ...y,
+          yazan_kisi_adi: aktifKullanici.ad_soyad,
+          yazan_kisi_avatar: aktifKullanici.avatar,
+        };
+        setYorumlar([...yorumlar, yeniYorumObj]);
         setYeniYorum("");
       });
   };
+
   const handleDragEnd = (event) => {
     const { active, over } = event;
     if (!over) return;
@@ -503,6 +579,7 @@ export default function GorevYonetimi({
       setTakvimGunModal(true);
     }
   };
+
   const takvimCellRender = (value) => {
     const t = value.format("YYYY-MM-DD");
     const l = gorevler.filter((g) => g.tarih && g.tarih.startsWith(t));
@@ -546,10 +623,10 @@ export default function GorevYonetimi({
       dataIndex: "atananlar",
       width: 120,
       render: (kisiler) => (
-        <Avatar.Group maxCount={3} size="small">
+        <Avatar.Group max={{ count: 3 }} size="small">
           {kisiler?.map((k, i) => (
             <Tooltip title={k} key={i}>
-              <Avatar style={{ backgroundColor: "#87d068" }}>{k[0]}</Avatar>
+              {getUserAvatar(k, kullanicilar || [])}
             </Tooltip>
           ))}
         </Avatar.Group>
@@ -606,7 +683,10 @@ export default function GorevYonetimi({
   return (
     <div>
       {viewMode !== "calendar" && (
-        <Card style={{ marginBottom: 16 }} bodyStyle={{ padding: "12px 20px" }}>
+        <Card
+          style={{ marginBottom: 16 }}
+          styles={{ body: { padding: "12px 20px" } }} // bodyStyle deprecation fix
+        >
           <Row justify="space-between" align="middle">
             <Col>
               <Space wrap>
@@ -700,6 +780,7 @@ export default function GorevYonetimi({
                       key={g.id}
                       gorev={g}
                       onClick={() => detayAc(g)}
+                      allUsers={kullanicilar || []}
                     />
                   ))}
               </KanbanColumn>
@@ -717,6 +798,7 @@ export default function GorevYonetimi({
                       key={g.id}
                       gorev={g}
                       onClick={() => detayAc(g)}
+                      allUsers={kullanicilar || []}
                     />
                   ))}
               </KanbanColumn>
@@ -730,6 +812,7 @@ export default function GorevYonetimi({
                       key={g.id}
                       gorev={g}
                       onClick={() => detayAc(g)}
+                      allUsers={kullanicilar || []}
                     />
                   ))}
               </KanbanColumn>
@@ -832,13 +915,14 @@ export default function GorevYonetimi({
         </Form>
       </Modal>
 
+      {/* DETAY MODALI */}
       <Modal
         open={detayModalAcik}
         onCancel={() => setDetayModalAcik(false)}
         footer={null}
         width={900}
         centered
-        title={duzenlemeModu ? "Görevi Düzenle" : "Görev Detayı"}
+        title={`Görev Detayı #${seciliGorev?.id}`}
       >
         {seciliGorev && (
           <Row gutter={24}>
@@ -847,34 +931,52 @@ export default function GorevYonetimi({
                 form={detayForm}
                 layout="vertical"
                 initialValues={seciliGorev}
-                disabled={!duzenlemeModu}
               >
-                <div style={{ marginBottom: 15 }}>
+                <div
+                  style={{
+                    marginBottom: 15,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
                   <Tag color="geekblue">
                     {seciliGorev.proje_adi || "Genel Görev"}
                   </Tag>
-                  {/* GÜNCELLEME: Modal Başlığında ID */}
                   <span style={{ marginLeft: 10, fontWeight: 600 }}>
                     #{seciliGorev.id}
                   </span>
-                  <Button
-                    onClick={() => setDuzenlemeModu(!duzenlemeModu)}
-                    icon={duzenlemeModu ? <SaveOutlined /> : <EditOutlined />}
-                    style={{ float: "right" }}
-                  >
-                    {duzenlemeModu ? "İptal" : "Düzenle"}
-                  </Button>
+                  <Space>
+                    <Button
+                      onClick={() => setDuzenlemeModu(!duzenlemeModu)}
+                      icon={duzenlemeModu ? <SaveOutlined /> : <EditOutlined />}
+                    >
+                      {duzenlemeModu ? "İptal" : "Düzenle"}
+                    </Button>
+                    <Popconfirm
+                      title="Sil?"
+                      onConfirm={() => {
+                        sil(seciliGorev.id);
+                        setDetayModalAcik(false);
+                      }}
+                    >
+                      <Button danger icon={<DeleteOutlined />} />
+                    </Popconfirm>
+                  </Space>
                 </div>
                 <Form.Item name="baslik" label="Başlık">
-                  <Input style={{ fontWeight: "bold" }} />
+                  <Input
+                    style={{ fontWeight: "bold" }}
+                    disabled={!duzenlemeModu}
+                  />
                 </Form.Item>
                 <Form.Item name="aciklama" label="Açıklama">
-                  <Input.TextArea rows={3} />
+                  <Input.TextArea rows={3} disabled={!duzenlemeModu} />
                 </Form.Item>
                 <Row gutter={10}>
                   <Col span={12}>
                     <Form.Item name="atananlar" label="Sorumlular">
-                      <Select mode="multiple">
+                      <Select mode="multiple" disabled={!duzenlemeModu}>
                         {kullanicilar?.map((k) => (
                           <Option key={k.id} value={k.ad_soyad}>
                             {k.ad_soyad}
@@ -885,7 +987,10 @@ export default function GorevYonetimi({
                   </Col>
                   <Col span={12}>
                     <Form.Item name="tarih" label="Bitiş">
-                      <DatePicker style={{ width: "100%" }} />
+                      <DatePicker
+                        style={{ width: "100%" }}
+                        disabled={!duzenlemeModu}
+                      />
                     </Form.Item>
                   </Col>
                 </Row>
@@ -903,30 +1008,50 @@ export default function GorevYonetimi({
                         <Button icon={<UploadOutlined />}>Yeni Dosya</Button>
                       </Upload>
                     </Form.Item>
-                    <Button
-                      type="primary"
-                      block
-                      onClick={() => gorevGuncelle(detayForm.getFieldsValue())}
-                    >
+                    <Button type="primary" block onClick={handleEditClick}>
                       Değişiklikleri Kaydet
                     </Button>
                   </>
                 )}
               </Form>
 
-              {!duzenlemeModu && seciliGorev.dosya_yolu && (
-                <Button
-                  icon={<PaperClipOutlined />}
-                  block
-                  style={{ marginTop: 10 }}
-                  onClick={() =>
-                    window.open(`${API_URL}/drive/ara?q=${seciliGorev.baslik}`)
-                  }
-                  target="_blank"
-                >
-                  Dosyaları Görüntüle
-                </Button>
-              )}
+              <div style={{ marginTop: 20 }}>
+                <Title level={5}>Ekli Dosyalar</Title>
+                {seciliGorevDosyalari.length > 0 ? (
+                  <List
+                    size="small"
+                    dataSource={seciliGorevDosyalari}
+                    renderItem={(file) => (
+                      <List.Item
+                        actions={[
+                          <a
+                            href={`${API_URL}/uploads/${file.fiziksel_ad}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            İndir/Görüntüle
+                          </a>,
+                        ]}
+                      >
+                        <List.Item.Meta
+                          avatar={getFileIcon(file.ad)}
+                          title={file.ad}
+                          description={
+                            <span style={{ fontSize: 10 }}>
+                              {dayjs(file.tarih).format("DD.MM.YYYY HH:mm")}
+                            </span>
+                          }
+                        />
+                      </List.Item>
+                    )}
+                  />
+                ) : (
+                  <div style={{ color: "#999", fontStyle: "italic" }}>
+                    Bu görevde dosya yok.
+                  </div>
+                )}
+              </div>
+
               <Divider style={{ margin: "15px 0" }} />
               <Title level={5}>Alt Görevler</Title>
               <List
@@ -988,9 +1113,19 @@ export default function GorevYonetimi({
                     <List.Item style={{ padding: "8px 0" }}>
                       <List.Item.Meta
                         avatar={
-                          <Avatar style={{ backgroundColor: "#1890ff" }}>
-                            {item.yazan_kisi[0]}
-                          </Avatar>
+                          item.yazan_kisi_avatar ? (
+                            <Avatar
+                              src={`${API_URL}/uploads/${item.yazan_kisi_avatar}`}
+                            />
+                          ) : (
+                            <Avatar style={{ backgroundColor: "#1890ff" }}>
+                              {
+                                (item.yazan_kisi_adi ||
+                                  item.yazan_kisi ||
+                                  "?")[0]
+                              }
+                            </Avatar>
+                          )
                         }
                         title={
                           <div
@@ -999,7 +1134,9 @@ export default function GorevYonetimi({
                               justifyContent: "space-between",
                             }}
                           >
-                            <Text strong>{item.yazan_kisi}</Text>
+                            <Text strong>
+                              {item.yazan_kisi_adi || item.yazan_kisi || "?"}
+                            </Text>
                             <Text type="secondary" style={{ fontSize: 10 }}>
                               {dayjs(item.tarih).format("DD.MM HH:mm")}
                             </Text>
@@ -1041,7 +1178,7 @@ export default function GorevYonetimi({
         placement="right"
         onClose={() => setTakvimGunModal(false)}
         open={takvimGunModal}
-        width={400}
+        // width prop kaldırıldı -> Drawer width deprecation fix
       >
         <List
           dataSource={seciliGunIsleri}

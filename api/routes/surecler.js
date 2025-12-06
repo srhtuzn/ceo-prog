@@ -31,28 +31,30 @@ router.get("/katalog", async (req, res) => {
   }
 });
 
-// 2. SÜREÇ DETAYINI VE ADIMLARINI GETİR
+// 2. SÜREÇ DETAYI (JOIN Eklendi)
 router.get("/detay/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Süreç bilgisi
-    const surec = await pool.query("SELECT * FROM surecler WHERE id = $1", [
-      id,
-    ]);
+    // olusturan_id'den isme git
+    const surec = await pool.query(
+      `
+        SELECT s.*, k.ad_soyad as olusturan_adi 
+        FROM surecler s 
+        LEFT JOIN kullanicilar k ON s.olusturan_id = k.id 
+        WHERE s.id = $1`,
+      [id]
+    );
+
     if (surec.rows.length === 0)
       return res.status(404).send("Süreç bulunamadı");
 
-    // Adımlar
     const adimlar = await pool.query(
       "SELECT * FROM surec_adimlari WHERE surec_id = $1 ORDER BY sira_no ASC",
       [id]
     );
 
-    res.json({
-      bilgi: surec.rows[0],
-      adimlar: adimlar.rows,
-    });
+    res.json({ bilgi: surec.rows[0], adimlar: adimlar.rows });
   } catch (err) {
     console.error(err);
     res.status(500).send("Detay hatası");

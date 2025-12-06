@@ -9,9 +9,9 @@ import DosyaYoneticisi from "./DosyaYoneticisi";
 import ProfilYonetimi from "./ProfilYonetimi";
 import BildirimYonetimi from "./BildirimYonetimi";
 import ChatWidget from "./ChatWidget";
-import MesaiTakip from "./MesaiTakip"; // Düzeltildi
-import MesaiWidget from "./MesaiWidget"; // Eklendi
-import SurecYonetimi from "./SurecYonetimi"; // Eklendi
+import MesaiTakip from "./MesaiTakip";
+import MesaiWidget from "./MesaiWidget";
+import SurecYonetimi from "./SurecYonetimi";
 import {
   DesktopOutlined,
   UnorderedListOutlined,
@@ -29,10 +29,8 @@ import {
   DeleteOutlined,
   ProjectOutlined,
   SaveOutlined,
-  PlusOutlined,
-  FolderAddOutlined,
   ClockCircleOutlined,
-  BookOutlined, // Süreç Kütüphanesi ikonu
+  BookOutlined,
 } from "@ant-design/icons";
 import {
   Layout,
@@ -44,17 +42,16 @@ import {
   Select,
   DatePicker,
   message,
-  List,
-  Avatar,
+  Table,
+  Tag,
+  Row,
+  Col,
   Space,
   Typography,
   Dropdown,
   Tabs,
   Popconfirm,
-  Table,
-  Tag,
-  Row,
-  Col,
+  Avatar,
 } from "antd";
 import dayjs from "dayjs";
 
@@ -75,6 +72,7 @@ function App() {
     setAktifKullanici(null);
     window.location.reload();
   };
+
   const kullaniciGuncelle = (yeniKullanici) => {
     setAktifKullanici(yeniKullanici);
     localStorage.setItem("wf_user", JSON.stringify(yeniKullanici));
@@ -88,10 +86,6 @@ function App() {
   const [projeModalAcik, setProjeModalAcik] = useState(false);
   const [profilModalAcik, setProfilModalAcik] = useState(false);
   const [aktifTab, setAktifTab] = useState("1");
-  const [yeniIsModalAcik, setYeniIsModalAcik] = useState(false);
-
-  // DEBUG İÇİN: Konsola kullanıcının rolünü yazdırıyorum
-  console.log("Giriş Yapan Rol:", aktifKullanici?.rol);
 
   const YONETICILER = [
     "Genel Müdür",
@@ -134,7 +128,6 @@ function App() {
       label: "Şirket Arşivi / Drive",
     },
     { key: "mesai", icon: <ClockCircleOutlined />, label: "Mesai Takip" },
-    // YENİ EKLENEN MODÜL
     { key: "surecler", icon: <BookOutlined />, label: "Süreç Kütüphanesi" },
   ];
 
@@ -178,7 +171,7 @@ function App() {
     const payload = {
       ad: degerler.ad,
       departman: degerler.departman,
-      olusturan: aktifKullanici.ad_soyad,
+      olusturan_id: aktifKullanici.id,
       baslangic_tarihi: degerler.tarih
         ? degerler.tarih[0].format("YYYY-MM-DD")
         : null,
@@ -293,18 +286,7 @@ function App() {
           </div>
 
           <Space>
-            {/* YENİ PROJE BUTONU (HERKES GÖRSÜN) */}
-            <Button
-              icon={<FolderAddOutlined />}
-              onClick={() => {
-                setProjeModalAcik(true);
-                setAktifTab("1");
-              }}
-            >
-              Projeler
-            </Button>
-
-            {/* MESAİ WIDGET */}
+            {/* Header’da Projeler butonu kaldırıldı; Proje modalı görev sayfasından açılıyor */}
             <MesaiWidget aktifKullanici={aktifKullanici} />
 
             <BildirimYonetimi
@@ -352,6 +334,7 @@ function App() {
             </Dropdown>
           </Space>
         </Header>
+
         <Content style={{ margin: "16px" }}>
           {sayfa === "dashboard" &&
             (yoneticiMi ? (
@@ -382,22 +365,28 @@ function App() {
               }}
             />
           )}
+
           {sayfa === "drive" && (
             <DosyaYoneticisi aktifKullanici={aktifKullanici} />
           )}
+
           {sayfa === "satinalma" && (
             <SatinAlma aktifKullanici={aktifKullanici} />
           )}
+
           {sayfa === "izinler" && (
             <IzinYonetimi aktifKullanici={aktifKullanici} />
           )}
+
           {sayfa === "ekip" && <EkipYonetimi aktifKullanici={aktifKullanici} />}
+
           {sayfa === "mesai" && <MesaiTakip aktifKullanici={aktifKullanici} />}
+
           {sayfa === "surecler" && <SurecYonetimi />}
         </Content>
       </Layout>
 
-      {/* --- PROJE YÖNETİM MODALI --- */}
+      {/* PROJE YÖNETİM MODALI – Görev sayfasından açılıyor */}
       <Modal
         title="Proje Yönetimi"
         open={projeModalAcik}
@@ -549,8 +538,10 @@ function App() {
         aktifKullanici={aktifKullanici}
         guncelle={kullaniciGuncelle}
       />
+
       <ChatWidget aktifKullanici={aktifKullanici} />
     </Layout>
   );
 }
+
 export default App;

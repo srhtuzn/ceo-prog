@@ -79,7 +79,7 @@ export default function IzinYonetimi({ aktifKullanici }) {
   };
 
   const izinHakkiCek = () => {
-    fetch(`${API_URL}/ik/izinler/kullanilan/${aktifKullanici.ad_soyad}`)
+    fetch(`${API_URL}/ik/izinler/kullanilan/${aktifKullanici.id}`)
       .then((res) => res.json())
       .then((data) => {
         setKullanilanIzin(data.kullanilan || 0);
@@ -106,7 +106,7 @@ export default function IzinYonetimi({ aktifKullanici }) {
     }
 
     const payload = {
-      ad_soyad: aktifKullanici.ad_soyad,
+      talep_eden_id: aktifKullanici.id,
       baslangic_tarihi: start.format("YYYY-MM-DD"),
       bitis_tarihi: end.format("YYYY-MM-DD"),
       aciklama: degerler.aciklama,

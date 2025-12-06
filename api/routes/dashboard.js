@@ -38,14 +38,52 @@ router.get("/ozet", async (req, res) => {
     // Farklı para birimleri olabileceği için TL bazında örnek toplama yapıyoruz veya ayrı ayrı.
     // Basitlik adına "Onay Bekleyen" kayıt sayısını ve toplam tutarı çekelim.
     const finansOzet = await pool.query(`
-      SELECT 
-        COUNT(*) as bekleyen_adet,
-        SUM(tutar) as toplam_tutar,
-        para_birimi
-      FROM satin_alma 
-      WHERE durum LIKE '%Bekliyor%'
-      GROUP BY para_birimi
-    `);
+  SELECT 
+    CASE 
+      WHEN para_birimi IN ('TL', 'TRY', '₺') THEN 'TL'
+      WHEN para_birimi IN ('USD', '$') THEN 'USD'
+      WHEN para_birimi IN ('EUR', '€', 'EURO') THEN 'EUR'
+      WHEN para_birimi IN ('GBP', '£') THEN 'GBP'
+      ELSE para_birimi 
+    END as para_birimi_grup,
+    COUNT(*) as bekleyen_adet,
+    SUM(tutar) as toplam_tutar
+  FROM satin_alma 
+  WHERE durum LIKE '%Bekliyor%'
+  GROUP BY 
+    CASE 
+      WHEN para_birimi IN ('TL', 'TRY', '₺') THEN 'TL'
+      WHEN para_birimi IN ('USD', '$') THEN 'USD'
+      WHEN para_birimi IN ('EUR', '€', 'EURO') THEN 'EUR'
+      WHEN para_birimi IN ('GBP', '£') THEN 'GBP'
+      ELSE para_birimi 
+    END
+  ORDER BY para_birimi_grup
+`);
+    // Farklı para birimleri için varsayılan değerler oluşturalım
+    const tumParaBirimleri = ["TL", "USD", "EUR", "GBP"];
+    const finansMap = {};
+
+    // Mevcut verileri map'e ekle
+    finansOzet.rows.forEach((row) => {
+      finansMap[row.para_birimi_grup] = {
+        paraBirimi: row.para_birimi_grup,
+        bekleyenAdet: parseInt(row.bekleyen_adet) || 0,
+        toplamTutar: parseFloat(row.toplam_tutar) || 0,
+      };
+    });
+
+    // Eksik para birimleri için 0 değerli objeler ekle
+    const finansArray = tumParaBirimleri.map((pb) => {
+      if (finansMap[pb]) {
+        return finansMap[pb];
+      }
+      return {
+        paraBirimi: pb,
+        bekleyenAdet: 0,
+        toplamTutar: 0,
+      };
+    });
 
     // 5. BUGÜN İZİNLİ OLANLAR
     const bugun = new Date().toISOString().split("T")[0]; // YYYY-MM-DD

@@ -510,7 +510,7 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
       body: JSON.stringify({
         ad: v.ad,
         ust_klasor_id: aktifKlasorId,
-        olusturan: aktifKullanici.ad_soyad,
+        olusturan_id: aktifKullanici.id,
       }),
     }).then(() => {
       message.success("Oluşturuldu");

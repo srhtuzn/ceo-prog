@@ -18,25 +18,34 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // ==========================================
-// 1. İÇERİK GETİR (Filtreleme ve Hiyerarşi)
+// 1. İÇERİK GETİR (JOIN ile İsimleri Çekme - Normalizasyon)
 // URL: GET /drive/icerik
 // ==========================================
 router.get("/icerik", async (req, res) => {
   try {
     const { klasor_id, userId } = req.query;
 
-    // Güvenlik ve Yetki kontrolleri burada genişletilebilir.
-    // Şimdilik temel mantık: Silinmemişleri getir.
-
     const klasorQuery =
       klasor_id && klasor_id !== "null"
-        ? "SELECT * FROM klasorler WHERE ust_klasor_id = $1 AND silindi = FALSE ORDER BY ad ASC"
-        : "SELECT * FROM klasorler WHERE ust_klasor_id IS NULL AND silindi = FALSE ORDER BY ad ASC";
+        ? `SELECT k.*, u.ad_soyad as olusturan_adi 
+           FROM klasorler k 
+           LEFT JOIN kullanicilar u ON k.olusturan_id = u.id 
+           WHERE k.ust_klasor_id = $1 AND k.silindi = FALSE ORDER BY k.ad ASC`
+        : `SELECT k.*, u.ad_soyad as olusturan_adi 
+           FROM klasorler k 
+           LEFT JOIN kullanicilar u ON k.olusturan_id = u.id 
+           WHERE k.ust_klasor_id IS NULL AND k.silindi = FALSE ORDER BY k.ad ASC`;
 
     const dosyaQuery =
       klasor_id && klasor_id !== "null"
-        ? "SELECT * FROM dosyalar WHERE klasor_id = $1 AND silindi = FALSE ORDER BY id DESC"
-        : "SELECT * FROM dosyalar WHERE klasor_id IS NULL AND silindi = FALSE ORDER BY id DESC";
+        ? `SELECT d.*, u.ad_soyad as yukleyen_adi 
+           FROM dosyalar d 
+           LEFT JOIN kullanicilar u ON d.yukleyen_id = u.id 
+           WHERE d.klasor_id = $1 AND d.silindi = FALSE ORDER BY d.id DESC`
+        : `SELECT d.*, u.ad_soyad as yukleyen_adi 
+           FROM dosyalar d 
+           LEFT JOIN kullanicilar u ON d.yukleyen_id = u.id 
+           WHERE d.klasor_id IS NULL AND d.silindi = FALSE ORDER BY d.id DESC`;
 
     const params = klasor_id && klasor_id !== "null" ? [klasor_id] : [];
 
@@ -66,53 +75,49 @@ router.get("/icerik", async (req, res) => {
 });
 
 // ==========================================
-// 2. DRIVE ARAMA (GELİŞMİŞ)
+// 2. DRIVE ARAMA (GELİŞMİŞ - JOIN EKLİ)
 // URL: GET /drive/ara?q=...
 // ==========================================
 router.get("/ara", async (req, res) => {
   try {
     const { q, tur, baslangic, bitis } = req.query;
 
-    // Temel Sorgu (Silinmemişler)
-    let sql = "SELECT * FROM dosyalar WHERE silindi = FALSE";
+    let sql = `SELECT d.*, u.ad_soyad as yukleyen_adi 
+                 FROM dosyalar d 
+                 LEFT JOIN kullanicilar u ON d.yukleyen_id = u.id 
+                 WHERE d.silindi = FALSE`;
     let params = [];
     let paramCounter = 1;
 
-    // 1. Metin Filtresi (İsimde Ara)
     if (q) {
-      sql += ` AND ad ILIKE $${paramCounter}`;
+      sql += ` AND d.ad ILIKE $${paramCounter}`;
       params.push(`%${q}%`);
       paramCounter++;
     }
-
-    // 2. Dosya Türü Filtresi (Resim, PDF, Excel vb.)
     if (tur) {
-      if (tur === "resim") {
-        sql += ` AND (uzanti ILIKE '.jpg' OR uzanti ILIKE '.png' OR uzanti ILIKE '.jpeg')`;
-      } else if (tur === "dokuman") {
-        sql += ` AND (uzanti ILIKE '.pdf' OR uzanti ILIKE '.docx' OR uzanti ILIKE '.txt')`;
-      } else if (tur === "excel") {
-        sql += ` AND (uzanti ILIKE '.xlsx' OR uzanti ILIKE '.csv')`;
-      }
+      if (tur === "resim")
+        sql += ` AND (d.uzanti ILIKE '.jpg' OR d.uzanti ILIKE '.png' OR d.uzanti ILIKE '.jpeg')`;
+      else if (tur === "dokuman")
+        sql += ` AND (d.uzanti ILIKE '.pdf' OR d.uzanti ILIKE '.docx' OR d.uzanti ILIKE '.txt')`;
+      else if (tur === "excel")
+        sql += ` AND (d.uzanti ILIKE '.xlsx' OR d.uzanti ILIKE '.csv')`;
     }
-
-    // 3. Tarih Aralığı Filtresi
     if (baslangic && bitis) {
-      sql += ` AND tarih BETWEEN $${paramCounter} AND $${paramCounter + 1}`;
+      sql += ` AND d.tarih BETWEEN $${paramCounter} AND $${paramCounter + 1}`;
       params.push(baslangic, bitis);
       paramCounter += 2;
     }
-
-    // Sıralama
-    sql += " ORDER BY id DESC";
-
+    sql += " ORDER BY d.id DESC";
     const dosyaSonuc = await pool.query(sql, params);
 
-    // Klasör araması sadece isimle yapılır
     let klasorSonuc = { rows: [] };
     if (q && !tur && !baslangic) {
       klasorSonuc = await pool.query(
-        "SELECT * FROM klasorler WHERE ad ILIKE $1 AND silindi = FALSE",
+        `
+            SELECT k.*, u.ad_soyad as olusturan_adi 
+            FROM klasorler k 
+            LEFT JOIN kullanicilar u ON k.olusturan_id = u.id
+            WHERE k.ad ILIKE $1 AND k.silindi = FALSE`,
         [`%${q}%`]
       );
     }
@@ -121,7 +126,6 @@ router.get("/ara", async (req, res) => {
       ...klasorSonuc.rows.map((k) => ({ ...k, tip: "klasor" })),
       ...dosyaSonuc.rows.map((d) => ({ ...d, tip: "dosya" })),
     ];
-
     res.json(sonuc);
   } catch (err) {
     console.error(err.message);
@@ -130,12 +134,11 @@ router.get("/ara", async (req, res) => {
 });
 
 // ==========================================
-// 3. İSTATİSTİKLER (YENİ - PROFESYONEL)
+// 3. İSTATİSTİKLER
 // URL: GET /drive/istatistik
 // ==========================================
 router.get("/istatistik", async (req, res) => {
   try {
-    // Toplam boyut, dosya sayısı
     const istatistik = await pool.query(`
             SELECT 
                 COUNT(*) as toplam_dosya,
@@ -151,17 +154,20 @@ router.get("/istatistik", async (req, res) => {
 });
 
 // ==========================================
-// 4. KLASÖR OLUŞTUR
+// 4. KLASÖR OLUŞTUR (ID Kaydet)
 // ==========================================
 router.post("/klasor", async (req, res) => {
   try {
-    const { ad, ust_klasor_id, olusturan } = req.body;
+    const { ad, ust_klasor_id, olusturan } = req.body; // Frontend'den ID gelmeli (olusturan)
     const pid =
       ust_klasor_id && ust_klasor_id !== "null" ? ust_klasor_id : null;
 
+    // Eğer olusturan (ID) gelmezse varsayılan 1 (Genel Müdür) ata
+    const creatorId = olusturan ? parseInt(olusturan) : 1;
+
     await pool.query(
-      "INSERT INTO klasorler (ad, ust_klasor_id, olusturan) VALUES ($1, $2, $3)",
-      [ad, pid, olusturan]
+      "INSERT INTO klasorler (ad, ust_klasor_id, olusturan_id) VALUES ($1, $2, $3)",
+      [ad, pid, creatorId]
     );
 
     res.json({ message: "Klasör oluşturuldu" });
@@ -172,19 +178,20 @@ router.post("/klasor", async (req, res) => {
 });
 
 // ==========================================
-// 5. DOSYA YÜKLE
+// 5. DOSYA YÜKLE (ID Kaydet)
 // ==========================================
 router.post("/dosya", upload.single("dosya"), async (req, res) => {
   try {
-    const { klasor_id, yukleyen } = req.body;
+    const { klasor_id, yukleyen } = req.body; // Frontend'den ID gelmeli (yukleyen)
     const file = req.file;
 
     if (!file) return res.status(400).send("Dosya yok");
 
     const pid = klasor_id && klasor_id !== "null" ? klasor_id : null;
+    const uploaderId = yukleyen ? parseInt(yukleyen) : 1;
 
     await pool.query(
-      "INSERT INTO dosyalar (ad, fiziksel_ad, dosya_yolu, uzanti, boyut, klasor_id, yukleyen, tarih) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())",
+      "INSERT INTO dosyalar (ad, fiziksel_ad, dosya_yolu, uzanti, boyut, klasor_id, yukleyen_id, tarih) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())",
       [
         file.originalname,
         file.filename,
@@ -192,7 +199,7 @@ router.post("/dosya", upload.single("dosya"), async (req, res) => {
         path.extname(file.originalname),
         file.size,
         pid,
-        yukleyen,
+        uploaderId,
       ]
     );
 
@@ -204,7 +211,7 @@ router.post("/dosya", upload.single("dosya"), async (req, res) => {
 });
 
 // ==========================================
-// 6. İŞLEMLER (İsim Değiştir, Sil, Taşı)
+// 6. İŞLEMLER (İsim Değiştir, Sil, Taşı, Kopyala)
 // ==========================================
 router.put("/dosya/:id", async (req, res) => {
   try {
@@ -218,7 +225,6 @@ router.put("/dosya/:id", async (req, res) => {
 });
 
 router.delete("/dosya/:id", async (req, res) => {
-  // Soft Delete
   try {
     await pool.query("UPDATE dosyalar SET silindi = TRUE WHERE id = $1", [
       req.params.id,
@@ -230,7 +236,6 @@ router.delete("/dosya/:id", async (req, res) => {
 });
 
 router.delete("/klasor/:id", async (req, res) => {
-  // Soft Delete
   try {
     await pool.query("UPDATE klasorler SET silindi = TRUE WHERE id = $1", [
       req.params.id,
@@ -266,20 +271,14 @@ router.post("/kopyala", async (req, res) => {
     const dosya = kaynak.rows[0];
     const yeniFizikselAd = `copy_${Date.now()}_${dosya.fiziksel_ad}`;
 
-    // Kaynak ve Hedef Yolları
-    const kaynakYol = path.join(__dirname, "../../uploads", dosya.fiziksel_ad); // 'api' klasörünün bir üstüne çıkıp 'uploads'a gitmeli
+    const kaynakYol = path.join(__dirname, "../../uploads", dosya.fiziksel_ad);
     const hedefYol = path.join(__dirname, "../../uploads", yeniFizikselAd);
 
-    // Fiziksel Kopyalama (Hata yönetimi ile)
     try {
       if (fs.existsSync(kaynakYol)) {
         fs.copyFileSync(kaynakYol, hedefYol);
       } else {
-        // Dosya fiziksel olarak yoksa bile veritabanında kopyasını oluştur (pointer hatası olmasın)
-        // Veya hata dön. Biz hata dönelim güvenli olsun.
-        return res
-          .status(500)
-          .json({ error: "Fiziksel dosya bulunamadı, kopyalanamadı." });
+        return res.status(500).json({ error: "Fiziksel dosya bulunamadı" });
       }
     } catch (fsError) {
       console.error("Dosya kopyalama hatası:", fsError);
@@ -287,15 +286,18 @@ router.post("/kopyala", async (req, res) => {
     }
 
     const yeniAd = `${path.parse(dosya.ad).name} - Kopya${dosya.uzanti}`;
+
+    // Kopyalarken 'yukleyen_id'yi de taşıyoruz veya oturum açan kişi yapabiliriz.
+    // Şimdilik kaynak dosyanın sahibini kopyalıyoruz.
     await pool.query(
-      "INSERT INTO dosyalar (ad, fiziksel_ad, dosya_yolu, uzanti, boyut, yukleyen, klasor_id, tarih) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())",
+      "INSERT INTO dosyalar (ad, fiziksel_ad, dosya_yolu, uzanti, boyut, yukleyen_id, klasor_id, tarih) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())",
       [
         yeniAd,
         yeniFizikselAd,
         yeniFizikselAd,
         dosya.uzanti,
         dosya.boyut,
-        dosya.yukleyen,
+        dosya.yukleyen_id,
         hedefKlasorId,
       ]
     );
@@ -310,8 +312,6 @@ router.post("/kopyala", async (req, res) => {
 // ==========================================
 // 7. ÇÖP KUTUSU YÖNETİMİ
 // ==========================================
-
-// Çöpü Listele
 router.get("/cop-kutusu", async (req, res) => {
   try {
     const klasorler = await pool.query(
@@ -326,7 +326,6 @@ router.get("/cop-kutusu", async (req, res) => {
   }
 });
 
-// Geri Yükle
 router.put("/geri-yukle", async (req, res) => {
   try {
     const { id, tip } = req.body;
@@ -338,7 +337,6 @@ router.put("/geri-yukle", async (req, res) => {
   }
 });
 
-// Tekil Kalıcı Sil
 router.delete("/kalici-sil", async (req, res) => {
   try {
     const { id, tip } = req.body;
@@ -357,7 +355,6 @@ router.delete("/kalici-sil", async (req, res) => {
       }
       await pool.query("DELETE FROM dosyalar WHERE id = $1", [id]);
     } else {
-      // Klasör silinince içindekiler de silinmeli (Cascade mantığı eklenebilir)
       await pool.query("DELETE FROM klasorler WHERE id = $1", [id]);
     }
     res.json({ message: "Kalıcı olarak silindi" });
@@ -366,57 +363,37 @@ router.delete("/kalici-sil", async (req, res) => {
   }
 });
 
-// TOPLU ÇÖP TEMİZLİĞİ (YENİ ÖZELLİK 🧹)
-// URL: DELETE /drive/copu-bosalt
 router.delete("/copu-bosalt", async (req, res) => {
   try {
-    // 1. Silinecek dosyaların fiziksel isimlerini al
     const silinecekler = await pool.query(
       "SELECT fiziksel_ad FROM dosyalar WHERE silindi = TRUE"
     );
-
-    // 2. Fiziksel dosyaları sil
     silinecekler.rows.forEach((file) => {
       const yol = path.join(__dirname, "../../uploads", file.fiziksel_ad);
       if (fs.existsSync(yol)) fs.unlinkSync(yol);
     });
-
-    // 3. Veritabanından sil
     await pool.query("DELETE FROM dosyalar WHERE silindi = TRUE");
     await pool.query("DELETE FROM klasorler WHERE silindi = TRUE");
-
     res.json({ message: "Çöp kutusu tamamen temizlendi." });
   } catch (err) {
-    console.error("TEMİZLİK HATASI:", err.message);
     res.status(500).send("Temizlik yapılamadı");
   }
 });
 
-// PERİYODİK TEMİZLİK (30 Günden Eskileri Sil)
-// URL: DELETE /drive/otomatik-temizle (CronJob ile çağrılabilir)
 router.delete("/otomatik-temizle", async (req, res) => {
   try {
-    // 30 gün önce: NOW() - INTERVAL '30 days'
-
-    // 1. Dosyaları Bul
     const eskiler = await pool.query(
       "SELECT fiziksel_ad FROM dosyalar WHERE silindi = TRUE AND tarih < NOW() - INTERVAL '30 days'"
     );
-
-    // 2. Fiziksel Sil
     eskiler.rows.forEach((file) => {
       const yol = path.join(__dirname, "../../uploads", file.fiziksel_ad);
       if (fs.existsSync(yol)) fs.unlinkSync(yol);
     });
-
-    // 3. DB Temizlik
     await pool.query(
       "DELETE FROM dosyalar WHERE silindi = TRUE AND tarih < NOW() - INTERVAL '30 days'"
     );
-
     res.json({ message: `${eskiler.rows.length} adet eski dosya temizlendi.` });
   } catch (err) {
-    console.error(err);
     res.status(500).send("Otomatik temizlik hatası");
   }
 });
