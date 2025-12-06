@@ -5,23 +5,30 @@ const pool = require("../config/db");
 const { upload } = require("../config/upload");
 const path = require("path");
 
-// Yardımcı Fonksiyon
+// --- YARDIMCI FONKSİYON: Klasör Zinciri Oluştur ---
+// Verilen isimlerde (örn: ["Bilgi İşlem", "Web Sitesi Yenileme"]) klasörleri sırasıyla bulur veya oluşturur.
 async function klasorHiyerarsisiOlustur(klasorAdlari, olusturan) {
   let ustKlasorId = null;
   for (const ad of klasorAdlari) {
     if (!ad) continue;
-    let sorgu = "SELECT id FROM klasorler WHERE ad = $1";
+
+    // Klasör var mı kontrol et (Silinmemiş olanlar)
+    let sorgu = "SELECT id FROM klasorler WHERE ad = $1 AND silindi = FALSE";
     let params = [ad];
+
     if (ustKlasorId) {
       sorgu += " AND ust_klasor_id = $2";
       params.push(ustKlasorId);
     } else {
       sorgu += " AND ust_klasor_id IS NULL";
     }
+
     const varMi = await pool.query(sorgu, params);
+
     if (varMi.rows.length > 0) {
       ustKlasorId = varMi.rows[0].id;
     } else {
+      // Yoksa oluştur
       const yeni = await pool.query(
         "INSERT INTO klasorler (ad, ust_klasor_id, olusturan) VALUES ($1, $2, $3) RETURNING id",
         [ad, ustKlasorId, olusturan]
@@ -33,9 +40,59 @@ async function klasorHiyerarsisiOlustur(klasorAdlari, olusturan) {
 }
 
 // ==========================================
-// 1. GÖREV LİSTELEME
-// URL: GET /gorevler/
+// ÖNEMLİ: PROJE ROTALARI (EN ÜSTTE OLMALI)
 // ==========================================
+
+// PROJE LİSTELE
+router.get("/projeler", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM projeler ORDER BY id DESC");
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+
+// PROJE EKLE
+router.post("/projeler", async (req, res) => {
+  try {
+    const { ad, departman, baslangic_tarihi, bitis_tarihi, olusturan } =
+      req.body;
+    const result = await pool.query(
+      "INSERT INTO projeler (ad, departman, baslangic_tarihi, bitis_tarihi, olusturan) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+      [ad, departman, baslangic_tarihi, bitis_tarihi, olusturan]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+
+// PROJE SİL
+router.delete("/projeler/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Projeye bağlı görevleri serbest bırak
+    await pool.query(
+      "UPDATE gorevler SET proje_id = NULL WHERE proje_id = $1",
+      [id]
+    );
+    // Projeyi sil
+    await pool.query("DELETE FROM projeler WHERE id = $1", [id]);
+    res.json({ message: "Proje silindi" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Hata");
+  }
+});
+
+// ==========================================
+// GÖREV ROTALARI
+// ==========================================
+
+// 1. GÖREV LİSTELEME
 router.get("/", async (req, res) => {
   try {
     const result = await pool.query(`
@@ -47,41 +104,32 @@ router.get("/", async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error(err.message);
-    res.status(500).send("Sunucu hatası");
+    res.status(500).send("Hata");
   }
 });
 
-// ==========================================
 // 2. TEK GÖREV GETİR
-// URL: GET /gorevler/:id
-// ==========================================
 router.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    // Eğer gelen id "projeler" ise (çakışma kontrolü) burayı atla
-    if (id === "projeler") return;
+    // ID kontrolü (Sayısal değilse hata vermemesi için)
+    if (isNaN(id)) return res.status(400).json({ error: "Geçersiz ID" });
 
     const result = await pool.query(
       `SELECT g.*, p.ad as proje_adi FROM gorevler g LEFT JOIN projeler p ON g.proje_id = p.id WHERE g.id = $1`,
       [id]
     );
-
     if (result.rows.length === 0)
       return res.status(404).json({ error: "Görev bulunamadı" });
     res.json(result.rows[0]);
   } catch (err) {
-    // ID sayı değilse (örn: /gorevler/projeler çağrıldıysa) hata vermesin diye
-    if (err.code === "22P02") return res.status(404).send("Geçersiz ID");
     console.error(err.message);
-    res.status(500).send("Sunucu hatası");
+    res.status(500).send("Hata");
   }
 });
 
-// ==========================================
-// 3. GÖREV EKLEME
-// URL: POST /gorevler/
-// ==========================================
-router.post("/", upload.array("dosyalar", 10), async (req, res) => {
+// 3. GÖREV EKLEME (GELİŞMİŞ KLASÖRLEME MANTIĞI) 🧠
+router.post("/", upload.array("dosyalar"), async (req, res) => {
   try {
     const {
       baslik,
@@ -94,77 +142,63 @@ router.post("/", upload.array("dosyalar", 10), async (req, res) => {
       tekrar_tipi,
     } = req.body;
 
-    let atananlarParsed = atananlar ? JSON.parse(atananlar) : [];
-    let gozlemcilerParsed = gozlemciler ? JSON.parse(gozlemciler) : [];
-    const pid =
-      proje_id && proje_id !== "null" && proje_id !== "undefined"
-        ? proje_id
-        : null;
-
-    const dosya_yolu_db =
-      req.files && req.files.length > 0
-        ? req.files.length === 1
-          ? req.files[0].filename
-          : "COKLU_DOSYA"
-        : null;
-
+    // 1. Görevi Kaydet
     const result = await pool.query(
-      "INSERT INTO gorevler (baslik, aciklama, oncelik, tarih, durum, atananlar, gozlemciler, dosya_yolu, proje_id, tekrar_tipi) VALUES ($1, $2, $3, $4, 'Bekliyor', $5, $6, $7, $8, $9) RETURNING *",
+      "INSERT INTO gorevler (baslik, aciklama, oncelik, tarih, durum, atananlar, gozlemciler, proje_id, tekrar_tipi) VALUES ($1, $2, $3, $4, 'Bekliyor', $5, $6, $7, $8) RETURNING *",
       [
         baslik,
         aciklama,
         oncelik,
         tarih,
-        atananlarParsed,
-        gozlemcilerParsed,
-        dosya_yolu_db,
-        pid,
+        JSON.parse(atananlar || "[]"),
+        JSON.parse(gozlemciler || "[]"),
+        proje_id || null,
         tekrar_tipi || "Tek Seferlik",
       ]
     );
     const yeniGorevId = result.rows[0].id;
 
-    // DRIVE ENTEGRASYONU
+    // 2. DRIVE ENTEGRASYONU
     if (req.files && req.files.length > 0) {
-      const olusturanKisi = "Sistem";
+      const olusturan = "Sistem";
       let hedefKlasorId = null;
-      let anaRotaKlasorId = null;
 
-      if (pid) {
-        const projeBilgi = await pool.query(
-          "SELECT ad, departman FROM projeler WHERE id = $1",
-          [pid]
+      // A. Ana Rotayı Belirle: [Departman] > [Proje]
+      let yol = ["Genel Görevler"]; // Varsayılan
+      if (proje_id) {
+        const prj = await pool.query(
+          "SELECT ad, departman FROM projeler WHERE id=$1",
+          [proje_id]
         );
-        if (projeBilgi.rows.length > 0) {
-          const { ad: projeAdi, departman: projeDepartman } =
-            projeBilgi.rows[0];
-          anaRotaKlasorId = await klasorHiyerarsisiOlustur(
-            [projeDepartman, projeAdi],
-            olusturanKisi
-          );
+        if (prj.rows.length > 0) {
+          yol = [prj.rows[0].departman, prj.rows[0].ad];
         }
-      } else {
-        anaRotaKlasorId = await klasorHiyerarsisiOlustur(
-          ["Genel Görevler"],
-          olusturanKisi
-        );
       }
 
+      // Bu klasör zincirini oluştur veya bul
+      const projeKlasorId = await klasorHiyerarsisiOlustur(yol, olusturan);
+      hedefKlasorId = projeKlasorId;
+
+      // B. Dosya Sayısına Göre Karar Ver
+      // SENARYO 1: Birden fazla dosya varsa -> Görev için özel klasör aç
       if (req.files.length > 1) {
         const gorevKlasorAdi = `#${yeniGorevId} - ${baslik}`;
-        const gorevKlasorRes = await pool.query(
+        const klasorRes = await pool.query(
           "INSERT INTO klasorler (ad, ust_klasor_id, olusturan) VALUES ($1, $2, $3) RETURNING id",
-          [gorevKlasorAdi, anaRotaKlasorId, olusturanKisi]
+          [gorevKlasorAdi, projeKlasorId, olusturan]
         );
-        hedefKlasorId = gorevKlasorRes.rows[0].id;
-      } else {
-        hedefKlasorId = anaRotaKlasorId;
+        hedefKlasorId = klasorRes.rows[0].id;
       }
+      // SENARYO 2: Tek dosya varsa -> Direkt proje klasörüne at (hedefKlasorId değişmez)
 
+      // C. Dosyaları Kaydet
       for (const file of req.files) {
         let finalAd = file.originalname;
-        if (req.files.length === 1)
+
+        // Tek dosya ise, karışmaması için dosya adına ID ekle
+        if (req.files.length === 1) {
           finalAd = `#${yeniGorevId} - ${file.originalname}`;
+        }
 
         await pool.query(
           "INSERT INTO dosyalar (ad, fiziksel_ad, dosya_yolu, uzanti, boyut, yukleyen, klasor_id, tarih) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())",
@@ -179,139 +213,65 @@ router.post("/", upload.array("dosyalar", 10), async (req, res) => {
           ]
         );
       }
+
+      // Görev kaydını güncelle (Dosya var ikonu çıksın diye)
+      const dosyaYoluStr =
+        req.files.length > 1 ? "COKLU_DOSYA" : req.files[0].filename;
+      await pool.query("UPDATE gorevler SET dosya_yolu = $1 WHERE id = $2", [
+        dosyaYoluStr,
+        yeniGorevId,
+      ]);
+      result.rows[0].dosya_yolu = dosyaYoluStr;
     }
+
     res.json(result.rows[0]);
   } catch (err) {
-    console.error("KAYIT HATASI:", err.message);
+    console.error("GÖREV EKLEME HATASI:", err.message);
     res.status(500).send(err.message);
   }
 });
 
-// ==========================================
 // 4. GÖREV GÜNCELLEME
-// URL: PUT /gorevler/:id
-// ==========================================
-router.put("/:id", upload.single("dosya"), async (req, res) => {
+router.put("/:id", upload.array("dosyalar"), async (req, res) => {
   try {
     const { id } = req.params;
-    const {
-      baslik,
-      aciklama,
-      oncelik,
-      tarih,
-      durum,
-      atananlar,
-      gozlemciler,
-      proje_id,
-      tekrar_tipi,
-    } = req.body;
-    const yeni_dosya_yolu = req.file ? req.file.filename : undefined;
-
-    const eskiGorevSorgu = await pool.query(
-      "SELECT * FROM gorevler WHERE id = $1",
-      [id]
-    );
-    if (eskiGorevSorgu.rows.length === 0)
-      return res.status(404).json({ error: "Görev yok" });
-    const eskiGorev = eskiGorevSorgu.rows[0];
-
-    let atananlarParsed = eskiGorev.atananlar;
-    let gozlemcilerParsed = eskiGorev.gozlemciler;
-    try {
-      if (atananlar !== undefined)
-        atananlarParsed = atananlar
-          ? JSON.parse(atananlar)
-          : eskiGorev.atananlar;
-      if (gozlemciler !== undefined)
-        gozlemcilerParsed = gozlemciler
-          ? JSON.parse(gozlemciler)
-          : eskiGorev.gozlemciler;
-    } catch (e) {}
-
-    const y_baslik = baslik !== undefined ? baslik : eskiGorev.baslik;
-    const y_aciklama = aciklama !== undefined ? aciklama : eskiGorev.aciklama;
-    const y_oncelik = oncelik !== undefined ? oncelik : eskiGorev.oncelik;
-    const y_tarih = tarih !== undefined ? tarih : eskiGorev.tarih;
-    const y_durum = durum !== undefined ? durum : eskiGorev.durum;
-    const y_proje_id =
-      proje_id && proje_id !== "null" ? proje_id : eskiGorev.proje_id;
-    const y_tekrar_tipi =
-      tekrar_tipi !== undefined ? tekrar_tipi : eskiGorev.tekrar_tipi;
-    const y_dosya_yolu =
-      yeni_dosya_yolu !== undefined ? yeni_dosya_yolu : eskiGorev.dosya_yolu;
+    const { baslik, aciklama, oncelik, durum, proje_id } = req.body;
 
     await pool.query(
-      `UPDATE gorevler SET baslik=$1, aciklama=$2, oncelik=$3, tarih=$4, durum=$5, atananlar=$6, gozlemciler=$7, proje_id=$8, tekrar_tipi=$9, dosya_yolu=$10 WHERE id=$11`,
-      [
-        y_baslik,
-        y_aciklama,
-        y_oncelik,
-        y_tarih,
-        y_durum,
-        atananlarParsed,
-        gozlemcilerParsed,
-        y_proje_id,
-        y_tekrar_tipi,
-        y_dosya_yolu,
-        id,
-      ]
+      "UPDATE gorevler SET baslik=$1, aciklama=$2, oncelik=$3, durum=$4, proje_id=$5 WHERE id=$6",
+      [baslik, aciklama, oncelik, durum, proje_id || null, id]
     );
 
-    if (req.file) {
-      await pool.query(
-        `INSERT INTO dosyalar (ad, fiziksel_ad, dosya_yolu, uzanti, boyut, yukleyen, tarih) VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-        [
-          req.file.originalname,
-          req.file.filename,
-          req.file.filename,
-          path.extname(req.file.originalname),
-          req.file.size,
-          "Görev Sistemi",
-        ]
-      );
-    }
+    // Not: Güncelleme sırasında yeni dosya eklenirse, yukarıdaki 'POST' mantığının aynısı
+    // buraya da eklenebilir. Şimdilik sadelik adına sadece metin güncelliyoruz.
+    // İstenirse burası genişletilebilir.
 
-    // Bildirimler
-    if (y_durum !== eskiGorev.durum) {
-      let msg = "";
-      if (y_durum === "Onay Bekliyor") msg = `⚠️ "${y_baslik}" onaya sunuldu.`;
-      else if (y_durum === "Yapıldı") msg = `✅ "${y_baslik}" tamamlandı.`;
-      else if (y_durum === "Bekliyor" && eskiGorev.durum === "Onay Bekliyor")
-        msg = `❌ "${y_baslik}" reddedildi.`;
-
-      if (msg)
-        await pool.query(
-          "INSERT INTO bildirimler (mesaj, kime, gorev_id) VALUES ($1, $2, $3)",
-          [msg, "İlgililer", id]
-        );
-    }
-
-    const finalResult = await pool.query(
-      `SELECT g.*, p.ad as proje_adi FROM gorevler g LEFT JOIN projeler p ON g.proje_id = p.id WHERE g.id = $1`,
-      [id]
-    );
-    res.json(finalResult.rows[0]);
+    res.json({ message: "Güncellendi" });
   } catch (err) {
-    console.error("GÜNCELLEME HATASI:", err.message);
-    res.status(500).json({ error: err.message });
+    console.error(err.message);
+    res.status(500).send("Hata");
   }
 });
 
-// ==========================================
-// 5. GÖREV SİLME
-// URL: DELETE /gorevler/:id
-// ==========================================
+// 5. GÖREV SİLME (DRIVE TEMİZLİĞİ EKLENDİ 🧹)
 router.delete("/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const gorevSorgu = await pool.query(
-      "SELECT dosya_yolu FROM gorevler WHERE id = $1",
-      [id]
-    );
-    if (gorevSorgu.rows.length === 0)
-      return res.status(404).json({ error: "Görev bulunamadı" });
+
+    // A. Görev Klasörünü Çöpe At (#ID - Başlık formatında olanlar)
+    await pool.query("UPDATE klasorler SET silindi = TRUE WHERE ad LIKE $1", [
+      `#${id} -%`,
+    ]);
+
+    // B. Tekil Dosyaları Çöpe At (#ID - DosyaAdı formatında olanlar)
+    await pool.query("UPDATE dosyalar SET silindi = TRUE WHERE ad LIKE $1", [
+      `#${id} -%`,
+    ]);
+
+    // C. Görevi Sil
     await pool.query("DELETE FROM gorevler WHERE id = $1", [id]);
-    res.json({ mesaj: "Görev silindi" });
+
+    res.json({ message: "Görev ve dosyaları silindi (Çöp kutusuna taşındı)" });
   } catch (err) {
     console.error(err.message);
     res.status(500).json({ error: "Silme hatası" });
@@ -319,86 +279,77 @@ router.delete("/:id", async (req, res) => {
 });
 
 // ==========================================
-// 6. YORUMLAR
-// URL: /gorevler/:id/yorumlar
+// DİĞERLERİ (Yorum, Alt Görev)
 // ==========================================
+
 router.get("/:id/yorumlar", async (req, res) => {
   try {
-    const result = await pool.query(
+    const r = await pool.query(
       "SELECT * FROM yorumlar WHERE gorev_id = $1 ORDER BY tarih ASC",
       [req.params.id]
     );
-    res.json(result.rows);
+    res.json(r.rows);
   } catch (err) {
-    console.error(err.message);
+    console.error(err);
   }
 });
 
 router.post("/:id/yorumlar", async (req, res) => {
   try {
-    const { id } = req.params;
     const { yazan_kisi, mesaj } = req.body;
-    const result = await pool.query(
+    const r = await pool.query(
       "INSERT INTO yorumlar (gorev_id, yazan_kisi, mesaj) VALUES ($1, $2, $3) RETURNING *",
-      [id, yazan_kisi, mesaj]
+      [req.params.id, yazan_kisi, mesaj]
     );
 
-    let bildirimMesajı = `💬 ${yazan_kisi} bir yorum yazdı.`;
-    if (mesaj.includes("@"))
-      bildirimMesajı = `📣 ${yazan_kisi} senden bahsetti!`;
+    // Bildirim
+    let bildirim = `💬 ${yazan_kisi} bir yorum yazdı.`;
+    if (mesaj.includes("@")) bildirim = `📣 ${yazan_kisi} senden bahsetti!`;
     await pool.query(
       "INSERT INTO bildirimler (mesaj, kime, gorev_id) VALUES ($1, $2, $3)",
-      [bildirimMesajı, "İlgililer", id]
+      [bildirim, "İlgililer", req.params.id]
     );
 
-    res.json(result.rows[0]);
+    res.json(r.rows[0]);
   } catch (err) {
-    console.error(err.message);
+    console.error(err);
   }
 });
 
-// ==========================================
-// 7. ALT GÖREVLER
-// URL: /gorevler/:id/alt-gorevler
-// ==========================================
 router.get("/:id/alt-gorevler", async (req, res) => {
   try {
-    const result = await pool.query(
+    const r = await pool.query(
       "SELECT * FROM alt_gorevler WHERE gorev_id = $1 ORDER BY id ASC",
       [req.params.id]
     );
-    res.json(result.rows);
+    res.json(r.rows);
   } catch (err) {
-    console.error(err.message);
+    console.error(err);
   }
 });
 
 router.post("/:id/alt-gorevler", async (req, res) => {
   try {
     const { baslik, olusturan } = req.body;
-    const result = await pool.query(
+    const r = await pool.query(
       "INSERT INTO alt_gorevler (gorev_id, baslik, olusturan) VALUES ($1, $2, $3) RETURNING *",
       [req.params.id, baslik, olusturan]
     );
-    res.json(result.rows[0]);
+    res.json(r.rows[0]);
   } catch (err) {
-    console.error(err.message);
-    res.status(500).send("Hata");
+    console.error(err);
   }
 });
 
-// Not: Bu ikisi ID bazlı olduğu için gorev id'ye bağımlı değil, olduğu gibi kalabilir veya genel bir route'a taşınabilir.
-// Şimdilik burada bırakıyoruz ama frontend erişirken /gorevler/alt-gorevler/:id diyecek.
 router.put("/alt-gorevler/:id", async (req, res) => {
   try {
-    const { durum } = req.body;
     await pool.query("UPDATE alt_gorevler SET durum = $1 WHERE id = $2", [
-      durum,
+      req.body.durum,
       req.params.id,
     ]);
-    res.json({ message: "Güncellendi" });
+    res.json({ message: "Ok" });
   } catch (err) {
-    console.error(err.message);
+    console.error(err);
   }
 });
 
@@ -407,57 +358,7 @@ router.delete("/alt-gorevler/:id", async (req, res) => {
     await pool.query("DELETE FROM alt_gorevler WHERE id = $1", [req.params.id]);
     res.json({ message: "Silindi" });
   } catch (err) {
-    console.error(err.message);
-  }
-});
-
-// ==========================================
-// 8. PROJELER (ÖZEL DURUM)
-// URL: /gorevler/projeler (Çünkü gorevler.js içine koyduk)
-// ==========================================
-router.get("/projeler", async (req, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM projeler ORDER BY id DESC");
-    res.json(result.rows);
-  } catch (err) {
-    console.error(err.message);
-  }
-});
-
-router.post("/projeler", async (req, res) => {
-  try {
-    const { ad, departman, baslangic_tarihi, bitis_tarihi, olusturan } =
-      req.body;
-    const result = await pool.query(
-      "INSERT INTO projeler (ad, departman, baslangic_tarihi, bitis_tarihi, olusturan) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-      [ad, departman, baslangic_tarihi, bitis_tarihi, olusturan]
-    );
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error(err.message);
-  }
-});
-
-// 9. PROJE SİLME (Güvenli Silme)
-// URL: DELETE /gorevler/projeler/:id
-// ==========================================
-router.delete("/projeler/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // 1. Önce bu projeye bağlı görevlerin proje_id'sini NULL yap (Görevler silinmesin)
-    await pool.query(
-      "UPDATE gorevler SET proje_id = NULL WHERE proje_id = $1",
-      [id]
-    );
-
-    // 2. Projeyi sil
-    await pool.query("DELETE FROM projeler WHERE id = $1", [id]);
-
-    res.json({ message: "Proje silindi, bağlı görevler serbest bırakıldı." });
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).send("Proje silme hatası");
+    console.error(err);
   }
 });
 

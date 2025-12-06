@@ -15,6 +15,9 @@ import {
   Empty,
   Spin,
   Typography,
+  Dropdown,
+  Menu,
+  Space,
 } from "antd";
 import {
   MessageOutlined,
@@ -29,6 +32,10 @@ import {
   SmileOutlined,
   SearchOutlined,
   ArrowLeftOutlined,
+  UserAddOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  CheckOutlined,
 } from "@ant-design/icons";
 import io from "socket.io-client";
 import dayjs from "dayjs";
@@ -41,23 +48,25 @@ dayjs.locale("tr");
 const { Text, Title } = Typography;
 const { Option } = Select;
 
-// Backend URL
 const SOCKET_URL = "http://localhost:3000";
 const API_URL = "http://localhost:3000";
 
-let socket; // Socket instance'ı dışarıda tutuyoruz ki renderlarda kaybolmasın
+let socket;
 
 export default function ChatWidget({ aktifKullanici }) {
   const [acik, setAcik] = useState(false);
-  const [chats, setChats] = useState([]); // Sohbet Listesi
-  const [activeChat, setActiveChat] = useState(null); // Şu an açık olan sohbet
-  const [messages, setMessages] = useState([]); // Aktif sohbetin mesajları
+  const [chats, setChats] = useState([]);
+  const [activeChat, setActiveChat] = useState(null);
+  const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
-  const [isTyping, setIsTyping] = useState(false); // Karşı taraf yazıyor mu?
+  const [isTyping, setIsTyping] = useState(false);
   const [loadingChat, setLoadingChat] = useState(false);
 
-  // Grup Kurma State'leri
+  // Modallar ve Düzenleme
   const [grupModal, setGrupModal] = useState(false);
+  const [yeniMesajModal, setYeniMesajModal] = useState(false);
+  const [editMode, setEditMode] = useState(null); // { id: 1, text: "..." } veya null
+
   const [tumKullanicilar, setTumKullanicilar] = useState([]);
   const [yeniGrupAdi, setYeniGrupAdi] = useState("");
   const [secilenUyeler, setSecilenUyeler] = useState([]);
@@ -65,196 +74,317 @@ export default function ChatWidget({ aktifKullanici }) {
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
 
-  // 1. SOCKET BAĞLANTISI VE EVENTLER
   useEffect(() => {
     if (!aktifKullanici) return;
-
-    // Bağlan
     socket = io(SOCKET_URL);
 
-    // Bağlantı kurulunca
     socket.on("connect", () => {
-      console.log("🟢 Chat Sunucusuna Bağlanıldı ID:", socket.id);
+      if (activeChat) {
+        socket.emit("join_room", activeChat.id);
+        // Bağlanınca hemen görüldü at
+        socket.emit("mark_seen", {
+          sohbet_id: activeChat.id,
+          okuyan_id: aktifKullanici.id,
+        });
+      }
     });
 
-    // Mesaj Geldiğinde
     socket.on("receive_message", (msg) => {
-      // Eğer şu an o sohbet açıksa mesajı ekrana bas
+      if (msg.gonderen_id === aktifKullanici.id) return;
+
       if (activeChat && activeChat.id === msg.sohbet_id) {
         setMessages((prev) => [...prev, msg]);
         scrollToBottom();
+        // Sohbet açıksa anında görüldü yap
+        socket.emit("mark_seen", {
+          sohbet_id: activeChat.id,
+          okuyan_id: aktifKullanici.id,
+        });
       }
-
-      // Sohbet listesini güncelle (Son mesajı ve tarihi değiştir, yukarı taşı)
-      setChats((prevChats) => {
-        const updatedChats = prevChats.map((c) =>
-          c.id === msg.sohbet_id
-            ? {
-                ...c,
-                son_mesaj:
-                  msg.icerik ||
-                  (msg.mesaj_tipi === "resim" ? "📷 Resim" : "📎 Dosya"),
-                son_mesaj_tarihi: new Date(),
-                okunmamis_sayisi:
-                  activeChat?.id === msg.sohbet_id ? 0 : c.okunmamis_sayisi + 1,
-              }
-            : c
-        );
-        // Mesaj gelen sohbeti en üste al
-        return updatedChats.sort(
-          (a, b) => new Date(b.son_mesaj_tarihi) - new Date(a.son_mesaj_tarihi)
-        );
-      });
+      updateChatList(msg);
     });
 
-    // Biri yazıyor...
+    // MESAJ GÜNCELLENDİ (DÜZENLEME/SİLME)
+    socket.on("message_updated", (updatedMsg) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === updatedMsg.id ? updatedMsg : m))
+      );
+    });
+
+    // MESAJLAR GÖRÜLDÜ (MAVİ TİK)
+    socket.on("messages_seen_update", ({ sohbet_id }) => {
+      if (activeChat && activeChat.id === sohbet_id) {
+        setMessages((prev) => prev.map((m) => ({ ...m, okundu: true })));
+      }
+    });
+
     socket.on("display_typing", () => setIsTyping(true));
     socket.on("hide_typing", () => setIsTyping(false));
 
     return () => {
       socket.disconnect();
     };
-  }, [activeChat, aktifKullanici]); // activeChat değişince listener'ın güncel kalması için
+  }, [activeChat, aktifKullanici]);
 
-  // 2. SOHBET LİSTESİNİ ÇEK
+  const updateChatList = (msg) => {
+    setChats((prevChats) => {
+      const chatExists = prevChats.find((c) => c.id === msg.sohbet_id);
+      if (!chatExists) {
+        fetchChats();
+        return prevChats;
+      }
+      const updatedChats = prevChats.map((c) =>
+        c.id === msg.sohbet_id
+          ? {
+              ...c,
+              son_mesaj:
+                msg.icerik ||
+                (msg.mesaj_tipi === "resim" ? "📷 Resim" : "📎 Dosya"),
+              son_mesaj_tarihi: new Date(),
+              okunmamis_sayisi:
+                activeChat && activeChat.id === msg.sohbet_id
+                  ? 0
+                  : c.okunmamis_sayisi + 1,
+            }
+          : c
+      );
+      return updatedChats.sort(
+        (a, b) => new Date(b.son_mesaj_tarihi) - new Date(a.son_mesaj_tarihi)
+      );
+    });
+  };
+
   useEffect(() => {
-    if (acik && aktifKullanici) {
-      fetchChats();
-    }
+    if (acik && aktifKullanici) fetchChats();
   }, [acik]);
 
   const fetchChats = async () => {
-    const res = await fetch(`${API_URL}/chat/list?userId=${aktifKullanici.id}`);
-    const data = await res.json();
-    setChats(data);
+    try {
+      const res = await fetch(
+        `${API_URL}/chat/list?userId=${aktifKullanici.id}`
+      );
+      const data = await res.json();
+      setChats(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  // 3. SOHBETE GİR
   const enterChat = async (chat) => {
     setActiveChat(chat);
     setLoadingChat(true);
-
-    // Odaya Katıl (Socket)
     socket.emit("join_room", chat.id);
 
-    // Geçmişi Çek (HTTP)
+    // Mesajları Çek
     const res = await fetch(`${API_URL}/chat/history/${chat.id}`);
     const data = await res.json();
     setMessages(data);
     setLoadingChat(false);
     scrollToBottom();
 
-    // Okunmamışları sıfırla (Frontend)
+    // Görüldü İşaretle
+    socket.emit("mark_seen", {
+      sohbet_id: chat.id,
+      okuyan_id: aktifKullanici.id,
+    });
+
     setChats((prev) =>
       prev.map((c) => (c.id === chat.id ? { ...c, okunmamis_sayisi: 0 } : c))
     );
   };
 
-  // 4. MESAJ GÖNDER
   const sendMessage = async () => {
     if (!inputText.trim()) return;
 
+    // Eğer Düzenleme Modundaysak
+    if (editMode) {
+      socket.emit("edit_message", {
+        mesajId: editMode.id,
+        yeniIcerik: inputText,
+      });
+      setEditMode(null);
+      setInputText("");
+      return;
+    }
+
+    // Normal Gönderim
     const msgData = {
       sohbet_id: activeChat.id,
       gonderen_id: aktifKullanici.id,
       icerik: inputText,
       tip: "metin",
+      tarih: new Date().toISOString(),
+      okundu: false, // Yeni mesaj okunmamıştır
     };
 
-    // Socket ile gönder (Veritabanına backend kaydedecek)
-    await socket.emit("send_message", msgData);
+    // Optimistic UI (Hemen ekrana bas)
+    setMessages((prev) => [...prev, msgData]);
+    scrollToBottom();
+    updateChatList(msgData);
+
+    socket.emit("send_message", msgData);
     setInputText("");
     socket.emit("stop_typing", activeChat.id);
   };
 
-  // 5. DOSYA GÖNDER
+  // SİLME VE DÜZENLEME FONKSİYONLARI
+  const mesajSil = (mesaj) => {
+    // Süre kontrolü (15 dk)
+    const fark = dayjs().diff(dayjs(mesaj.tarih), "minute");
+    if (fark > 15)
+      return message.warning("Mesaj 15 dakikadan eski, silinemez.");
+
+    Modal.confirm({
+      title: "Mesajı Sil",
+      content: "Bu mesaj herkesten silinecek.",
+      okText: "Sil",
+      okType: "danger",
+      cancelText: "Vazgeç",
+      onOk: () => {
+        socket.emit("delete_message", { mesajId: mesaj.id });
+      },
+    });
+  };
+
+  const mesajDuzenle = (mesaj) => {
+    // Süre kontrolü yapılabilir, şimdilik serbest
+    setEditMode({ id: mesaj.id, text: mesaj.icerik });
+    setInputText(mesaj.icerik); // Inputa metni taşı
+  };
+
+  const iptalEdit = () => {
+    setEditMode(null);
+    setInputText("");
+  };
+
   const handleFileUpload = async ({ file }) => {
     const formData = new FormData();
     formData.append("file", file);
-
     try {
-      // Önce HTTP ile yükle
       const res = await fetch(`${API_URL}/chat/upload`, {
         method: "POST",
         body: formData,
       });
       const data = await res.json();
-
-      // Sonra Socket ile yolunu gönder
       const msgData = {
         sohbet_id: activeChat.id,
         gonderen_id: aktifKullanici.id,
         icerik: null,
-        tip: data.tip, // 'resim' veya 'dosya'
+        tip: data.tip,
         dosya_yolu: data.dosya_yolu,
         dosya_adi: data.dosya_adi,
+        tarih: new Date().toISOString(),
+        okundu: false,
       };
+      setMessages((prev) => [...prev, msgData]);
+      scrollToBottom();
       socket.emit("send_message", msgData);
     } catch (err) {
-      message.error("Dosya yüklenemedi");
+      message.error("Hata");
     }
   };
 
-  // 6. GRUP OLUŞTURMA
+  // ... (Grup Oluşturma, Özel Sohbet Başlatma, Silme aynı kaldı) ...
+  const startPrivateChat = async (uid) => {
+    const p = {
+      tip: "ozel",
+      ad: null,
+      userIds: [uid],
+      olusturanId: aktifKullanici.id,
+    };
+    const r = await fetch(`${API_URL}/chat/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(p),
+    });
+    if (r.ok) {
+      setYeniMesajModal(false);
+      await fetchChats();
+      setTimeout(() => message.success("Sohbet açıldı"), 500);
+    }
+  };
   const createGroup = async () => {
     if (!yeniGrupAdi || secilenUyeler.length === 0)
-      return message.warning("İsim ve üye seçin");
-
-    const payload = {
+      return message.warning("Eksik");
+    const p = {
       tip: "grup",
       ad: yeniGrupAdi,
       userIds: secilenUyeler,
       olusturanId: aktifKullanici.id,
     };
-
-    const res = await fetch(`${API_URL}/chat/create`, {
+    const r = await fetch(`${API_URL}/chat/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(p),
     });
-
-    if (res.ok) {
-      message.success("Grup oluşturuldu");
+    if (r.ok) {
+      message.success("Grup kuruldu");
       setGrupModal(false);
-      fetchChats(); // Listeyi yenile
+      fetchChats();
       setYeniGrupAdi("");
       setSecilenUyeler([]);
     }
   };
-
+  const deleteChat = () => {
+    if (!activeChat) return;
+    Modal.confirm({
+      title: "Sohbeti Sil",
+      content: "Emin misiniz?",
+      okText: "Sil",
+      okType: "danger",
+      onOk: async () => {
+        await fetch(`${API_URL}/chat/${activeChat.id}`, { method: "DELETE" });
+        message.success("Silindi");
+        setActiveChat(null);
+        fetchChats();
+      },
+    });
+  };
   const kullanicilariGetir = async () => {
     if (tumKullanicilar.length === 0) {
-      const res = await fetch(`${API_URL}/chat/users`);
-      const data = await res.json();
-      setTumKullanicilar(data.filter((u) => u.id !== aktifKullanici.id));
+      const r = await fetch(`${API_URL}/chat/users`);
+      const d = await r.json();
+      setTumKullanicilar(d.filter((u) => u.id !== aktifKullanici.id));
     }
   };
-
-  // Helper: Scroll
   const scrollToBottom = () => {
     setTimeout(
       () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }),
       100
     );
   };
-
-  // Helper: Typing
   const handleTyping = (e) => {
     setInputText(e.target.value);
     if (!isTyping) socket.emit("typing", activeChat.id);
-
     clearTimeout(typingTimeoutRef.current);
     typingTimeoutRef.current = setTimeout(() => {
       socket.emit("stop_typing", activeChat.id);
     }, 2000);
   };
 
-  // --- RENDER PARÇALARI ---
+  // MENU İÇERİĞİ (Mesaj Üzeri Dropdown)
+  const getMessageMenu = (msg) => (
+    <Menu>
+      <Menu.Item
+        key="edit"
+        icon={<EditOutlined />}
+        onClick={() => mesajDuzenle(msg)}
+      >
+        Düzenle
+      </Menu.Item>
+      <Menu.Item
+        key="delete"
+        icon={<DeleteOutlined />}
+        danger
+        onClick={() => mesajSil(msg)}
+      >
+        Sil (Herkesten)
+      </Menu.Item>
+    </Menu>
+  );
 
-  // 1. Sohbet Listesi (Sol Taraf / Ana Ekran)
   const renderChatList = () => (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      {/* Header */}
       <div
         style={{
           padding: 15,
@@ -268,26 +398,29 @@ export default function ChatWidget({ aktifKullanici }) {
         <Title level={5} style={{ margin: 0 }}>
           Mesajlar
         </Title>
-        <Tooltip title="Yeni Grup Oluştur">
-          <Button
-            shape="circle"
-            icon={<UsergroupAddOutlined />}
-            onClick={() => {
-              setGrupModal(true);
-              kullanicilariGetir();
-            }}
-          />
-        </Tooltip>
+        <Space>
+          <Tooltip title="Yeni Mesaj">
+            <Button
+              shape="circle"
+              icon={<UserAddOutlined />}
+              onClick={() => {
+                setYeniMesajModal(true);
+                kullanicilariGetir();
+              }}
+            />
+          </Tooltip>
+          <Tooltip title="Yeni Grup">
+            <Button
+              shape="circle"
+              icon={<UsergroupAddOutlined />}
+              onClick={() => {
+                setGrupModal(true);
+                kullanicilariGetir();
+              }}
+            />
+          </Tooltip>
+        </Space>
       </div>
-      {/* Arama */}
-      <div style={{ padding: "10px 15px" }}>
-        <Input
-          prefix={<SearchOutlined style={{ color: "#ccc" }} />}
-          placeholder="Sohbet veya kişi ara..."
-          style={{ borderRadius: 20, background: "#f5f5f5", border: "none" }}
-        />
-      </div>
-      {/* Liste */}
       <div style={{ flex: 1, overflowY: "auto" }}>
         <List
           dataSource={chats}
@@ -364,7 +497,7 @@ export default function ChatWidget({ aktifKullanici }) {
         />
         {chats.length === 0 && (
           <Empty
-            description="Sohbet yok"
+            description="Mesaj yok"
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             style={{ marginTop: 50 }}
           />
@@ -373,10 +506,8 @@ export default function ChatWidget({ aktifKullanici }) {
     </div>
   );
 
-  // 2. Aktif Sohbet (Mesajlaşma Ekranı)
   const renderActiveChat = () => (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      {/* Header */}
       <div
         style={{
           padding: "10px 15px",
@@ -413,7 +544,7 @@ export default function ChatWidget({ aktifKullanici }) {
             </Text>
             <Text type="secondary" style={{ fontSize: 11 }}>
               {activeChat.tip === "grup" ? (
-                "Grup Üyeleri"
+                "Grup"
               ) : isTyping ? (
                 <span style={{ color: "#52c41a" }}>yazıyor...</span>
               ) : (
@@ -422,10 +553,23 @@ export default function ChatWidget({ aktifKullanici }) {
             </Text>
           </div>
         </div>
-        <Button type="text" icon={<MoreOutlined />} />
+        <Dropdown
+          menu={{
+            items: [
+              {
+                key: "sil",
+                label: "Sohbeti Sil",
+                icon: <DeleteOutlined />,
+                danger: true,
+                onClick: deleteChat,
+              },
+            ],
+          }}
+          placement="bottomRight"
+        >
+          <Button type="text" icon={<MoreOutlined />} />
+        </Dropdown>
       </div>
-
-      {/* Mesajlar */}
       <div
         style={{
           flex: 1,
@@ -441,6 +585,33 @@ export default function ChatWidget({ aktifKullanici }) {
         ) : (
           messages.map((msg, index) => {
             const ben = msg.gonderen_id === aktifKullanici.id;
+            // Silinmiş mesaj kontrolü
+            if (msg.silindi) {
+              return (
+                <div
+                  key={index}
+                  style={{
+                    display: "flex",
+                    justifyContent: ben ? "flex-end" : "flex-start",
+                    marginBottom: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 8,
+                      backgroundColor: "#f0f0f0",
+                      color: "#999",
+                      fontStyle: "italic",
+                      fontSize: 12,
+                    }}
+                  >
+                    <StopOutlined /> {msg.icerik}
+                  </div>
+                </div>
+              );
+            }
+
             return (
               <div
                 key={index}
@@ -450,34 +621,57 @@ export default function ChatWidget({ aktifKullanici }) {
                   marginBottom: 10,
                 }}
               >
-                <div
-                  style={{
-                    maxWidth: "70%",
-                    padding: "8px 12px",
-                    borderRadius: 8,
-                    backgroundColor: ben ? "#dcf8c6" : "#fff",
-                    boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
-                    position: "relative",
-                  }}
+                <Dropdown
+                  menu={
+                    ben
+                      ? {
+                          items: [
+                            {
+                              key: "edit",
+                              icon: <EditOutlined />,
+                              label: "Düzenle",
+                              onClick: () => mesajDuzenle(msg),
+                            },
+                            {
+                              key: "delete",
+                              icon: <DeleteOutlined />,
+                              label: "Sil",
+                              danger: true,
+                              onClick: () => mesajSil(msg),
+                            },
+                          ],
+                        }
+                      : { items: [] }
+                  }
+                  trigger={["contextMenu"]}
+                  disabled={!ben}
                 >
-                  {/* Grup ise gönderen ismini yaz */}
-                  {!ben && activeChat.tip === "grup" && (
-                    <Text
-                      type="secondary"
-                      style={{
-                        fontSize: 10,
-                        display: "block",
-                        marginBottom: 2,
-                        color: "#e542a3",
-                      }}
-                    >
-                      {msg.gonderen_adi}
-                    </Text>
-                  )}
+                  <div
+                    style={{
+                      maxWidth: "70%",
+                      padding: "8px 12px",
+                      borderRadius: 8,
+                      backgroundColor: ben ? "#dcf8c6" : "#fff",
+                      boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
+                      position: "relative",
+                      cursor: ben ? "pointer" : "default",
+                    }}
+                  >
+                    {!ben && activeChat.tip === "grup" && (
+                      <Text
+                        type="secondary"
+                        style={{
+                          fontSize: 10,
+                          display: "block",
+                          marginBottom: 2,
+                          color: "#e542a3",
+                        }}
+                      >
+                        {msg.gonderen_adi}
+                      </Text>
+                    )}
 
-                  {/* İçerik Tipi */}
-                  {msg.mesaj_tipi === "resim" ? (
-                    <div style={{ marginBottom: 5 }}>
+                    {msg.mesaj_tipi === "resim" ? (
                       <img
                         src={`${API_URL}/uploads/${msg.dosya_yolu}`}
                         alt="resim"
@@ -490,61 +684,76 @@ export default function ChatWidget({ aktifKullanici }) {
                           window.open(`${API_URL}/uploads/${msg.dosya_yolu}`)
                         }
                       />
-                    </div>
-                  ) : msg.mesaj_tipi === "dosya" ? (
+                    ) : msg.mesaj_tipi === "dosya" ? (
+                      <div
+                        style={{
+                          background: "rgba(0,0,0,0.05)",
+                          padding: 8,
+                          borderRadius: 4,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          cursor: "pointer",
+                        }}
+                        onClick={() =>
+                          window.open(`${API_URL}/uploads/${msg.dosya_yolu}`)
+                        }
+                      >
+                        <FileTextOutlined
+                          style={{ fontSize: 24, color: "#555" }}
+                        />
+                        <div>
+                          <Text strong style={{ fontSize: 12 }}>
+                            {msg.dosya_adi}
+                          </Text>
+                          <Text
+                            type="secondary"
+                            style={{ fontSize: 10, display: "block" }}
+                          >
+                            İndir
+                          </Text>
+                        </div>
+                      </div>
+                    ) : (
+                      <Text style={{ fontSize: 14 }}>{msg.icerik}</Text>
+                    )}
+
+                    {/* Düzenlendi Etiketi */}
+                    {msg.duzenlendi && (
+                      <span
+                        style={{ fontSize: 10, color: "#999", marginLeft: 5 }}
+                      >
+                        (düzenlendi)
+                      </span>
+                    )}
+
                     <div
                       style={{
-                        background: "rgba(0,0,0,0.05)",
-                        padding: 8,
-                        borderRadius: 4,
                         display: "flex",
+                        justifyContent: "flex-end",
                         alignItems: "center",
-                        gap: 8,
-                        cursor: "pointer",
+                        gap: 3,
+                        marginTop: 2,
                       }}
-                      onClick={() =>
-                        window.open(`${API_URL}/uploads/${msg.dosya_yolu}`)
-                      }
                     >
-                      <FileTextOutlined
-                        style={{ fontSize: 24, color: "#555" }}
-                      />
-                      <div>
-                        <Text strong style={{ fontSize: 12 }}>
-                          {msg.dosya_adi}
-                        </Text>
-                        <Text
-                          type="secondary"
-                          style={{ fontSize: 10, display: "block" }}
-                        >
-                          İndirmek için tıkla
-                        </Text>
-                      </div>
+                      <Text type="secondary" style={{ fontSize: 9 }}>
+                        {dayjs(msg.tarih).format("HH:mm")}
+                      </Text>
+                      {/* Mavi Tik Mantığı */}
+                      {ben &&
+                        (msg.okundu ? (
+                          <CheckCircleTwoTone
+                            twoToneColor="#1890ff"
+                            style={{ fontSize: 12 }}
+                          />
+                        ) : (
+                          <CheckOutlined
+                            style={{ fontSize: 12, color: "#999" }}
+                          />
+                        ))}
                     </div>
-                  ) : (
-                    <Text style={{ fontSize: 14 }}>{msg.icerik}</Text>
-                  )}
-
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "flex-end",
-                      alignItems: "center",
-                      gap: 3,
-                      marginTop: 2,
-                    }}
-                  >
-                    <Text type="secondary" style={{ fontSize: 9 }}>
-                      {dayjs(msg.tarih).format("HH:mm")}
-                    </Text>
-                    {ben && (
-                      <CheckCircleTwoTone
-                        twoToneColor="#52c41a"
-                        style={{ fontSize: 10 }}
-                      />
-                    )}
                   </div>
-                </div>
+                </Dropdown>
               </div>
             );
           })
@@ -562,31 +771,45 @@ export default function ChatWidget({ aktifKullanici }) {
           gap: 10,
         }}
       >
-        <Upload showUploadList={false} customRequest={handleFileUpload}>
-          <Button shape="circle" icon={<PaperClipOutlined />} />
-        </Upload>
+        {editMode ? (
+          <div
+            style={{ flex: 1, display: "flex", alignItems: "center", gap: 5 }}
+          >
+            <CloseOutlined
+              onClick={iptalEdit}
+              style={{ cursor: "pointer", color: "red" }}
+            />
+            <div style={{ flex: 1, fontWeight: "bold", color: "#1890ff" }}>
+              Mesaj Düzenleniyor...
+            </div>
+          </div>
+        ) : (
+          <Upload showUploadList={false} customRequest={handleFileUpload}>
+            <Button shape="circle" icon={<PaperClipOutlined />} />
+          </Upload>
+        )}
         <Input
           value={inputText}
           onChange={handleTyping}
           onPressEnter={sendMessage}
-          placeholder="Bir mesaj yazın..."
+          placeholder={
+            editMode ? "Düzenlenmiş mesajı yaz..." : "Bir mesaj yazın..."
+          }
           style={{ borderRadius: 20 }}
           suffix={<SmileOutlined style={{ color: "#ccc" }} />}
         />
         <Button
           type="primary"
           shape="circle"
-          icon={<SendOutlined />}
+          icon={editMode ? <CheckOutlined /> : <SendOutlined />}
           onClick={sendMessage}
         />
       </div>
     </div>
   );
 
-  // --- ANA RENDER ---
   return (
     <>
-      {/* 1. YÜZEN BUTON */}
       <Popover
         content={
           <div
@@ -631,7 +854,6 @@ export default function ChatWidget({ aktifKullanici }) {
         </div>
       </Popover>
 
-      {/* 2. GRUP KURMA MODALI */}
       <Modal
         title="Yeni Grup Oluştur"
         open={grupModal}
@@ -646,30 +868,64 @@ export default function ChatWidget({ aktifKullanici }) {
             value={yeniGrupAdi}
             onChange={(e) => setYeniGrupAdi(e.target.value)}
           />
-          <div>
-            <Text strong>Katılımcılar:</Text>
-            <Select
-              mode="multiple"
-              style={{ width: "100%" }}
-              placeholder="Kişileri seçin"
-              onChange={setSecilenUyeler}
-              value={secilenUyeler}
-            >
-              {tumKullanicilar.map((u) => (
-                <Option key={u.id} value={u.id}>
-                  <Avatar
-                    size="small"
-                    src={u.avatar ? `${API_URL}/uploads/${u.avatar}` : null}
-                    style={{ marginRight: 5 }}
-                  >
-                    {u.ad_soyad[0]}
-                  </Avatar>
-                  {u.ad_soyad}
-                </Option>
-              ))}
-            </Select>
-          </div>
+          <Select
+            mode="multiple"
+            style={{ width: "100%" }}
+            placeholder="Katılımcılar"
+            onChange={setSecilenUyeler}
+            value={secilenUyeler}
+          >
+            {tumKullanicilar.map((u) => (
+              <Option key={u.id} value={u.id}>
+                <Avatar
+                  size="small"
+                  src={u.avatar ? `${API_URL}/uploads/${u.avatar}` : null}
+                  style={{ marginRight: 5 }}
+                >
+                  {u.ad_soyad[0]}
+                </Avatar>
+                {u.ad_soyad}
+              </Option>
+            ))}
+          </Select>
         </div>
+      </Modal>
+
+      <Modal
+        title="Yeni Sohbet Başlat"
+        open={yeniMesajModal}
+        onCancel={() => setYeniMesajModal(false)}
+        footer={null}
+      >
+        <List
+          dataSource={tumKullanicilar}
+          renderItem={(user) => (
+            <List.Item
+              onClick={() => startPrivateChat(user.id)}
+              style={{ cursor: "pointer", padding: 10, borderRadius: 5 }}
+              className="chat-item-hover"
+            >
+              <List.Item.Meta
+                avatar={
+                  <Avatar
+                    src={
+                      user.avatar ? `${API_URL}/uploads/${user.avatar}` : null
+                    }
+                    style={{ backgroundColor: "#1890ff" }}
+                  >
+                    {user.ad_soyad[0]}
+                  </Avatar>
+                }
+                title={user.ad_soyad}
+                description={
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {user.departman}
+                  </Text>
+                }
+              />
+            </List.Item>
+          )}
+        />
       </Modal>
     </>
   );

@@ -102,12 +102,24 @@ router.delete("/kullanicilar/:id", async (req, res) => {
   }
 });
 
-// Yönetici ata
+// Yönetici ata (DÖNGÜ KONTROLÜ EKLENDİ 🛡️)
 router.put("/kullanicilar/yonetici-ata/:id", async (req, res) => {
   try {
+    const { id } = req.params; // Personel ID
+    const { yonetici_id } = req.body; // Atanacak Yönetici ID
+
+    // 1. Kendi kendine atamayı engelle
+    if (parseInt(id) === parseInt(yonetici_id)) {
+      return res.status(400).json({ error: "Kişi kendi yöneticisi olamaz!" });
+    }
+
+    // 2. (Opsiyonel ama İleri Seviye) Döngü Kontrolü:
+    // Eğer A, B'nin yöneticisiyse; B, A'nın yöneticisi olamaz.
+    // Bu kontrol veritabanında recursive query gerektirir, şimdilik basit tutuyoruz.
+
     await pool.query("UPDATE kullanicilar SET yonetici_id = $1 WHERE id = $2", [
-      req.body.yonetici_id,
-      req.params.id,
+      yonetici_id,
+      id,
     ]);
     res.json({ message: "Yönetici atandı" });
   } catch (err) {

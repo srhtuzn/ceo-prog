@@ -6,6 +6,8 @@ const http = require("http"); // <-- EKLENDİ: Node.js HTTP Modülü
 const { Server } = require("socket.io"); // <-- EKLENDİ: Socket.io
 const pool = require("./config/db"); // <-- EKLENDİ: DB Bağlantısı (Mesaj kaydı için)
 const { uploadDir } = require("./config/upload");
+const mesaiRoutes = require("./routes/mesai");
+const sureclerRoutes = require("./routes/surecler");
 
 const app = express();
 
@@ -38,25 +40,22 @@ const io = new Server(server, {
 });
 
 // ==========================================
-// SOCKET.IO MANTIĞI (REAL-TIME CHAT) ⚡
+// SOCKET.IO MANTIĞI (GELİŞMİŞ - WHATSAPP LEVEL) ⚡
 // ==========================================
 io.on("connection", (socket) => {
   console.log(`⚡ Kullanıcı bağlandı: ${socket.id}`);
 
-  // 1. Odaya Katıl (Sohbet ID'sine göre)
-  // Frontend: socket.emit("join_room", sohbet_id);
-  socket.on("join_room", (room) => {
+  // 1. Odaya Katıl
+  socket.on("join_room", async (room) => {
     socket.join(room);
     console.log(`Kullanıcı ${socket.id} odaya katıldı: ${room}`);
   });
 
-  // 2. Mesaj Gönderme & Veritabanı Kaydı
+  // 2. Mesaj Gönderme
   socket.on("send_message", async (data) => {
-    // data: { sohbet_id, gonderen_id, icerik, tip, dosya_yolu ... }
     try {
-      // A. Mesajı Veritabanına Kaydet
       const yeniMesaj = await pool.query(
-        "INSERT INTO mesajlar (sohbet_id, gonderen_id, icerik, mesaj_tipi, dosya_yolu, dosya_adi) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+        "INSERT INTO mesajlar (sohbet_id, gonderen_id, icerik, mesaj_tipi, dosya_yolu, dosya_adi, tarih, okundu) VALUES ($1, $2, $3, $4, $5, $6, NOW(), FALSE) RETURNING *",
         [
           data.sohbet_id,
           data.gonderen_id,
@@ -67,7 +66,7 @@ io.on("connection", (socket) => {
         ]
       );
 
-      // B. Sohbetin "Son Mesaj" bilgisini güncelle (Listede yukarı çıksın)
+      // Sohbet listesini güncelle
       const sonMesajMetni =
         data.tip === "dosya"
           ? "📎 Dosya"
@@ -79,19 +78,83 @@ io.on("connection", (socket) => {
         [sonMesajMetni, data.sohbet_id]
       );
 
-      // C. Mesajı Odadaki Herkese İlet (Gönderen dahil)
-      // Frontend'de gönderen kişi mesajı iki kere görmesin diye kontrol eklenebilir
-      // ama en garantisi veritabanından dönen ID'li mesajı basmaktır.
       io.to(data.sohbet_id).emit("receive_message", yeniMesaj.rows[0]);
     } catch (err) {
-      console.error("Socket mesaj hatası:", err);
+      console.error("Mesaj hatası:", err);
     }
   });
 
-  // 3. Yazıyor... (Typing)
+  // 3. MESAJ DÜZENLEME (YENİ)
+  socket.on("edit_message", async (data) => {
+    try {
+      // Veritabanını güncelle
+      const result = await pool.query(
+        "UPDATE mesajlar SET icerik = $1, duzenlendi = TRUE WHERE id = $2 RETURNING *",
+        [data.yeniIcerik, data.mesajId]
+      );
+      // Odadaki herkese "Bu mesaj güncellendi" bilgisini at
+      if (result.rows.length > 0) {
+        io.to(result.rows[0].sohbet_id).emit("message_updated", result.rows[0]);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  });
+
+  // 4. MESAJ SİLME (Süre Kısıtlı - YENİ)
+  socket.on("delete_message", async (data) => {
+    try {
+      // Önce mesajın tarihini kontrol et (Örn: 15 dakika kuralı)
+      const mesajSorgu = await pool.query(
+        "SELECT * FROM mesajlar WHERE id = $1",
+        [data.mesajId]
+      );
+      if (mesajSorgu.rows.length === 0) return;
+
+      const mesaj = mesajSorgu.rows[0];
+      const farkDakika = (new Date() - new Date(mesaj.tarih)) / 1000 / 60;
+
+      if (farkDakika > 15) {
+        // Hata gönderebiliriz veya sessizce reddederiz. Şimdilik sessiz.
+        return;
+      }
+
+      // Soft Delete: İçeriği sil, 'silindi' işaretle
+      const result = await pool.query(
+        "UPDATE mesajlar SET icerik = '🚫 Bu mesaj silindi', silindi = TRUE, dosya_yolu = NULL WHERE id = $1 RETURNING *",
+        [data.mesajId]
+      );
+
+      if (result.rows.length > 0) {
+        io.to(result.rows[0].sohbet_id).emit("message_updated", result.rows[0]);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  });
+
+  // 5. GÖRÜLDÜ İŞARETLEME (MAVİ TİK - YENİ)
+  socket.on("mark_seen", async (data) => {
+    // data: { sohbet_id, okuyan_id }
+    try {
+      // Bu sohbette, benden başkasının attığı ve okunmamış mesajları 'okundu' yap
+      await pool.query(
+        "UPDATE mesajlar SET okundu = TRUE WHERE sohbet_id = $1 AND gonderen_id != $2 AND okundu = FALSE",
+        [data.sohbet_id, data.okuyan_id]
+      );
+
+      // Karşı tarafa "Senin mesajların okundu" sinyali gönder
+      io.to(data.sohbet_id).emit("messages_seen_update", {
+        sohbet_id: data.sohbet_id,
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  });
+
+  // ... (Typing ve Disconnect aynı kalıyor) ...
   socket.on("typing", (room) => socket.to(room).emit("display_typing"));
   socket.on("stop_typing", (room) => socket.to(room).emit("hide_typing"));
-
   socket.on("disconnect", () => {
     console.log("Kullanıcı ayrıldı:", socket.id);
   });
@@ -118,6 +181,8 @@ app.use("/drive", driveRoutes);
 app.use("/finans", finansRoutes);
 app.use("/dashboard", dashboardRoutes);
 app.use("/chat", chatRoutes); // <-- HTTP işlemleri için (Grup kurma, geçmiş çekme vb.)
+app.use("/mesai", mesaiRoutes);
+app.use("/surecler", sureclerRoutes);
 
 // ==========================================
 // SUNUCU BAŞLATMA (app.listen DEĞİL, server.listen)

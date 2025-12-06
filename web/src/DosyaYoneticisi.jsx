@@ -15,8 +15,8 @@ import {
   Space,
   Popconfirm,
   Tooltip,
-  Statistic,
-  Progress,
+  Select,
+  DatePicker,
 } from "antd";
 import {
   FolderOpenFilled,
@@ -40,12 +40,19 @@ import {
   ClearOutlined,
   HistoryOutlined,
   DatabaseOutlined,
+  FilterOutlined,
+  EnterOutlined, // <-- Klasöre git ikonu eklendi
+  DownloadOutlined, // <-- İndir ikonu eklendi
 } from "@ant-design/icons";
 import { DndContext, useDraggable, useDroppable } from "@dnd-kit/core";
+import dayjs from "dayjs";
 
 const API_URL = "http://localhost:3000";
+const { RangePicker } = DatePicker;
+const { Option } = Select;
 
-// --- SÜRÜKLENEBİLİR BİLEŞENLER (Aynı Kaldı) ---
+// ... (DraggableDroppableKlasor ve DraggableDosya BİLEŞENLERİ AYNI KALACAK) ...
+// Kod tekrarı olmasın diye buraları atlıyorum, önceki kodunuzdaki gibi kalsın.
 const DraggableDroppableKlasor = ({
   klasor,
   onClick,
@@ -77,7 +84,6 @@ const DraggableDroppableKlasor = ({
         cursor: "grabbing",
       }
     : undefined;
-
   return (
     <div ref={setDragRef} style={style} {...attributes}>
       <div
@@ -191,7 +197,6 @@ const DraggableDosya = ({
         opacity: 0.5,
       }
     : undefined;
-
   return (
     <div ref={setNodeRef} style={style} {...attributes}>
       <div
@@ -301,6 +306,7 @@ const DraggableDosya = ({
 };
 
 export default function DosyaYoneticisi({ aktifKullanici }) {
+  // ... (State'ler AYNI) ...
   const [icerik, setIcerik] = useState({
     klasorler: [],
     dosyalar: [],
@@ -309,8 +315,12 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
   const [aktifKlasorId, setAktifKlasorId] = useState(null);
   const [gecmis, setGecmis] = useState([{ id: null, ad: "Ana Dizin" }]);
   const [copKutusuModu, setCopKutusuModu] = useState(false);
-  const [istatistik, setIstatistik] = useState(null); // Disk kullanımı vs.
-
+  const [istatistik, setIstatistik] = useState(null);
+  const [filtreMetin, setFiltreMetin] = useState("");
+  const [filtreTur, setFiltreTur] = useState(null);
+  const [filtreTarih, setFiltreTarih] = useState([]);
+  const [aramaSonuclar, setAramaSonuclar] = useState([]);
+  const [aramaAktif, setAramaAktif] = useState(false);
   const [pano, setPano] = useState(null);
   const [klasorModal, setKlasorModal] = useState(false);
   const [dosyaModal, setDosyaModal] = useState(false);
@@ -318,25 +328,23 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
   const [duzenlenecekDosya, setDuzenlenecekDosya] = useState(null);
   const [yeniDosyaAdi, setYeniDosyaAdi] = useState("");
   const [arama, setArama] = useState("");
-  const [aramaSonuclar, setAramaSonuclar] = useState([]);
 
   useEffect(() => {
     if (copKutusuModu) {
       copKutusuVeriCek();
       istatistikCek();
-    } else if (arama) {
-      aramaYap(arama);
+    } else if (aramaAktif) {
+      /* Arama modu */
     } else {
       veriCek(aktifKlasorId);
     }
-  }, [aktifKlasorId, arama, copKutusuModu]);
+  }, [aktifKlasorId, copKutusuModu, aramaAktif]);
 
   const veriCek = (id) => {
     fetch(`${API_URL}/drive/icerik?klasor_id=${id}&userId=${aktifKullanici.id}`)
       .then((res) => res.json())
       .then((data) => setIcerik(data));
   };
-
   const copKutusuVeriCek = () => {
     fetch(`${API_URL}/drive/cop-kutusu?userId=${aktifKullanici.id}`)
       .then((res) => res.json())
@@ -348,22 +356,41 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
         });
       });
   };
-
   const istatistikCek = () => {
     fetch(`${API_URL}/drive/istatistik`)
       .then((r) => r.json())
       .then(setIstatistik);
   };
 
-  const aramaYap = (val) => {
-    if (val) {
-      fetch(`${API_URL}/drive/ara?q=${val}`)
-        .then((res) => res.json())
-        .then((data) => setAramaSonuclar(data));
+  const aramaYap = () => {
+    if (!filtreMetin && !filtreTur && filtreTarih.length === 0) {
+      setAramaAktif(false);
+      veriCek(aktifKlasorId);
+      return;
     }
+    setAramaAktif(true);
+    const params = new URLSearchParams();
+    if (filtreMetin) params.append("q", filtreMetin);
+    if (filtreTur) params.append("tur", filtreTur);
+    if (filtreTarih.length === 2) {
+      params.append("baslangic", filtreTarih[0].format("YYYY-MM-DD"));
+      params.append("bitis", filtreTarih[1].format("YYYY-MM-DD"));
+    }
+    fetch(`${API_URL}/drive/ara?${params.toString()}`)
+      .then((res) => res.json())
+      .then((data) => setAramaSonuclar(data));
   };
 
-  // --- ACTIONS ---
+  const filtreTemizle = () => {
+    setFiltreMetin("");
+    setFiltreTur(null);
+    setFiltreTarih([]);
+    setAramaAktif(false);
+    setAramaSonuclar([]);
+    veriCek(aktifKlasorId);
+  };
+
+  // ... (İşlem Fonksiyonları: kopyala, kes, yapıştır, sil vb. AYNI KALACAK) ...
   const kopyala = (dosya) => {
     setPano({ tur: "kopyala", dosya });
     message.info("Kopyalandı");
@@ -372,7 +399,6 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
     setPano({ tur: "kes", dosya });
     message.info("Kesildi");
   };
-
   const yapistir = () => {
     if (!pano) return;
     const endpoint = pano.tur === "kes" ? "/drive/tasi" : "/drive/kopyala";
@@ -389,16 +415,13 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
       veriCek(aktifKlasorId);
     });
   };
-
-  // --- ÇÖP KUTUSU YÖNETİMİ (YENİ) ---
   const copuBosalt = () => {
     fetch(`${API_URL}/drive/copu-bosalt`, { method: "DELETE" }).then(() => {
-      message.success("Çöp kutusu tamamen boşaltıldı!");
+      message.success("Çöp boşaltıldı!");
       copKutusuVeriCek();
       istatistikCek();
     });
   };
-
   const eskiDosyalariTemizle = () => {
     fetch(`${API_URL}/drive/otomatik-temizle`, { method: "DELETE" }).then(
       async (res) => {
@@ -408,7 +431,6 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
       }
     );
   };
-
   const klasorSil = (id) => {
     fetch(`${API_URL}/drive/klasor/${id}`, { method: "DELETE" }).then(() => {
       message.success("Çöpe taşındı");
@@ -450,7 +472,6 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
     if (over.data.current.type !== "klasor") return;
     const hedefId = over.data.current.id;
     if (parseInt(tasinanId) === parseInt(hedefId)) return;
-
     if (tasinanTip === "dosya") {
       fetch(`${API_URL}/drive/tasi`, {
         method: "PUT",
@@ -460,9 +481,14 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
         message.success("Taşındı");
         veriCek(aktifKlasorId);
       });
-    } else if (tasinanTip === "klasor_item") {
-      // Klasör taşıma henüz backend'de yoksa burası hata verebilir, kontrol edin.
     }
+  };
+
+  // Arama Sonucundan Klasöre Gitme Fonksiyonu
+  const aramaSonucuGit = (klasorId, klasorAdi) => {
+    setAramaAktif(false); // Arama modundan çık
+    // setFiltreMetin(""); // İstersen filtreyi temizle
+    klasorGir(klasorId, klasorAdi); // Klasöre gir
   };
 
   const klasorGir = (id, ad) => {
@@ -521,7 +547,6 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
       veriCek(aktifKlasorId);
     });
   };
-
   const getIcon = (u) => {
     if (!u) return <FileOutlined style={{ fontSize: 32, color: "grey" }} />;
     if (u.includes("pdf"))
@@ -554,7 +579,6 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
         }
         extra={
           <Space>
-            {/* ÇÖP KUTUSU İŞLEMLERİ */}
             {copKutusuModu ? (
               <>
                 {istatistik && (
@@ -617,7 +641,6 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
                 </div>
               )
             )}
-
             <Button
               danger={!copKutusuModu}
               type={copKutusuModu ? "primary" : "default"}
@@ -625,59 +648,141 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
               onClick={() => {
                 if (copKutusuModu) {
                   setCopKutusuModu(false);
+                  setAramaAktif(false);
                 } else {
                   setCopKutusuModu(true);
                   setPano(null);
-                  setArama("");
+                  filtreTemizle();
                 }
               }}
             >
               {copKutusuModu ? "Dosyalara Dön" : "Çöp Kutusu"}
             </Button>
-
-            {!copKutusuModu && (
-              <>
-                <Input
-                  prefix={<SearchOutlined />}
-                  placeholder="Ara..."
-                  onChange={(e) => setArama(e.target.value)}
-                  style={{ width: 150 }}
-                  allowClear
-                />
-                <Button
-                  icon={<PlusOutlined />}
-                  onClick={() => setKlasorModal(true)}
-                >
-                  Klasör
-                </Button>
-                <Button
-                  type="primary"
-                  icon={<CloudUploadOutlined />}
-                  onClick={() => setDosyaModal(true)}
-                >
-                  Yükle
-                </Button>
-              </>
-            )}
           </Space>
         }
       >
-        {arama && !copKutusuModu ? (
+        {!copKutusuModu && (
+          <div
+            style={{
+              marginBottom: 20,
+              padding: 15,
+              background: "#f9f9f9",
+              borderRadius: 8,
+              border: "1px solid #eee",
+            }}
+          >
+            <Row gutter={[10, 10]} align="middle">
+              <Col xs={24} sm={6}>
+                <Input
+                  prefix={<SearchOutlined style={{ color: "#ccc" }} />}
+                  placeholder="Dosya adı ara..."
+                  value={filtreMetin}
+                  onChange={(e) => setFiltreMetin(e.target.value)}
+                  onPressEnter={aramaYap}
+                />
+              </Col>
+              <Col xs={12} sm={4}>
+                <Select
+                  placeholder="Dosya Türü"
+                  style={{ width: "100%" }}
+                  allowClear
+                  value={filtreTur}
+                  onChange={setFiltreTur}
+                >
+                  <Option value="resim">🖼️ Resimler</Option>
+                  <Option value="dokuman">📄 Dokümanlar (PDF/Word)</Option>
+                  <Option value="excel">📊 Tablolar (Excel)</Option>
+                </Select>
+              </Col>
+              <Col xs={12} sm={6}>
+                <RangePicker
+                  style={{ width: "100%" }}
+                  value={filtreTarih}
+                  onChange={setFiltreTarih}
+                  placeholder={["Başlangıç", "Bitiş"]}
+                />
+              </Col>
+              <Col xs={24} sm={8} style={{ textAlign: "right" }}>
+                <Space>
+                  <Button
+                    type="primary"
+                    icon={<SearchOutlined />}
+                    onClick={aramaYap}
+                  >
+                    Ara
+                  </Button>
+                  {(filtreMetin || filtreTur || filtreTarih.length > 0) && (
+                    <Button icon={<FilterOutlined />} onClick={filtreTemizle}>
+                      Temizle
+                    </Button>
+                  )}
+                  <Button
+                    icon={<PlusOutlined />}
+                    onClick={() => setKlasorModal(true)}
+                  >
+                    Klasör
+                  </Button>
+                  <Button
+                    type="primary"
+                    icon={<CloudUploadOutlined />}
+                    onClick={() => setDosyaModal(true)}
+                  >
+                    Yükle
+                  </Button>
+                </Space>
+              </Col>
+            </Row>
+          </div>
+        )}
+
+        {aramaAktif ? (
           <List
-            header={<div>Sonuçlar: "{arama}"</div>}
+            header={<div>Arama Sonuçları ({aramaSonuclar.length})</div>}
             dataSource={aramaSonuclar}
+            locale={{ emptyText: <Empty description="Sonuç bulunamadı" /> }}
             renderItem={(item) => (
               <List.Item
                 actions={[
-                  <a
-                    href={`${API_URL}/uploads/${item.fiziksel_ad}`}
-                    target="_blank"
-                  >
-                    İndir
-                  </a>,
+                  // DÜZELTME BURADA: Eğer Klasörse -> "Git", Dosyaysa -> "İndir"
+                  item.tip === "klasor" ? (
+                    <Button
+                      type="link"
+                      icon={<EnterOutlined />}
+                      onClick={() => aramaSonucuGit(item.id, item.ad)}
+                    >
+                      Klasöre Git
+                    </Button>
+                  ) : (
+                    <a
+                      href={`${API_URL}/uploads/${item.fiziksel_ad}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <Button type="link" icon={<DownloadOutlined />}>
+                        İndir
+                      </Button>
+                    </a>
+                  ),
                 ]}
               >
-                <List.Item.Meta title={item.ad} />
+                <List.Item.Meta
+                  avatar={
+                    item.tip === "klasor" ? (
+                      <FolderOpenFilled
+                        style={{ fontSize: 24, color: "#faad14" }}
+                      />
+                    ) : (
+                      getIcon(item.uzanti)
+                    )
+                  }
+                  title={item.ad}
+                  description={
+                    <div>
+                      {item.tip === "klasor" ? "Klasör" : "Dosya"} •{" "}
+                      {dayjs(item.tarih).format("DD.MM.YYYY HH:mm")}
+                    </div>
+                  }
+                />
               </List.Item>
             )}
           />
@@ -713,13 +818,16 @@ export default function DosyaYoneticisi({ aktifKullanici }) {
             {icerik.klasorler.length === 0 && icerik.dosyalar.length === 0 && (
               <Col span={24}>
                 <Empty
-                  description={copKutusuModu ? "Çöp kutusu boş" : "Klasör boş"}
+                  description={
+                    copKutusuModu ? "Çöp kutusu boş" : "Bu klasör boş"
+                  }
                 />
               </Col>
             )}
           </Row>
         )}
 
+        {/* Modallar */}
         <Modal
           title="Yeni Klasör"
           open={klasorModal}

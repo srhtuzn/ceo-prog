@@ -71,19 +71,52 @@ router.get("/icerik", async (req, res) => {
 // ==========================================
 router.get("/ara", async (req, res) => {
   try {
-    const { q } = req.query;
-    if (!q) return res.json([]);
+    const { q, tur, baslangic, bitis } = req.query;
 
-    const dosyaSonuc = await pool.query(
-      "SELECT * FROM dosyalar WHERE ad ILIKE $1 AND silindi = FALSE",
-      [`%${q}%`]
-    );
-    const klasorSonuc = await pool.query(
-      "SELECT * FROM klasorler WHERE ad ILIKE $1 AND silindi = FALSE",
-      [`%${q}%`]
-    );
+    // Temel Sorgu (Silinmemişler)
+    let sql = "SELECT * FROM dosyalar WHERE silindi = FALSE";
+    let params = [];
+    let paramCounter = 1;
 
-    // Frontend genelde tek liste beklediği için birleştiriyoruz, tipini belirtiyoruz
+    // 1. Metin Filtresi (İsimde Ara)
+    if (q) {
+      sql += ` AND ad ILIKE $${paramCounter}`;
+      params.push(`%${q}%`);
+      paramCounter++;
+    }
+
+    // 2. Dosya Türü Filtresi (Resim, PDF, Excel vb.)
+    if (tur) {
+      if (tur === "resim") {
+        sql += ` AND (uzanti ILIKE '.jpg' OR uzanti ILIKE '.png' OR uzanti ILIKE '.jpeg')`;
+      } else if (tur === "dokuman") {
+        sql += ` AND (uzanti ILIKE '.pdf' OR uzanti ILIKE '.docx' OR uzanti ILIKE '.txt')`;
+      } else if (tur === "excel") {
+        sql += ` AND (uzanti ILIKE '.xlsx' OR uzanti ILIKE '.csv')`;
+      }
+    }
+
+    // 3. Tarih Aralığı Filtresi
+    if (baslangic && bitis) {
+      sql += ` AND tarih BETWEEN $${paramCounter} AND $${paramCounter + 1}`;
+      params.push(baslangic, bitis);
+      paramCounter += 2;
+    }
+
+    // Sıralama
+    sql += " ORDER BY id DESC";
+
+    const dosyaSonuc = await pool.query(sql, params);
+
+    // Klasör araması sadece isimle yapılır
+    let klasorSonuc = { rows: [] };
+    if (q && !tur && !baslangic) {
+      klasorSonuc = await pool.query(
+        "SELECT * FROM klasorler WHERE ad ILIKE $1 AND silindi = FALSE",
+        [`%${q}%`]
+      );
+    }
+
     const sonuc = [
       ...klasorSonuc.rows.map((k) => ({ ...k, tip: "klasor" })),
       ...dosyaSonuc.rows.map((d) => ({ ...d, tip: "dosya" })),

@@ -9,6 +9,9 @@ import DosyaYoneticisi from "./DosyaYoneticisi";
 import ProfilYonetimi from "./ProfilYonetimi";
 import BildirimYonetimi from "./BildirimYonetimi";
 import ChatWidget from "./ChatWidget";
+import MesaiTakip from "./MesaiTakip"; // Düzeltildi
+import MesaiWidget from "./MesaiWidget"; // Eklendi
+import SurecYonetimi from "./SurecYonetimi"; // Eklendi
 import {
   DesktopOutlined,
   UnorderedListOutlined,
@@ -26,8 +29,10 @@ import {
   DeleteOutlined,
   ProjectOutlined,
   SaveOutlined,
-  PlusOutlined, // <-- Yeni İş butonu için
-  FolderAddOutlined, // <-- Proje butonu için
+  PlusOutlined,
+  FolderAddOutlined,
+  ClockCircleOutlined,
+  BookOutlined, // Süreç Kütüphanesi ikonu
 } from "@ant-design/icons";
 import {
   Layout,
@@ -83,7 +88,7 @@ function App() {
   const [projeModalAcik, setProjeModalAcik] = useState(false);
   const [profilModalAcik, setProfilModalAcik] = useState(false);
   const [aktifTab, setAktifTab] = useState("1");
-  const [yeniIsModalAcik, setYeniIsModalAcik] = useState(false); // Yeni İş Modalı için State
+  const [yeniIsModalAcik, setYeniIsModalAcik] = useState(false);
 
   // DEBUG İÇİN: Konsola kullanıcının rolünü yazdırıyorum
   console.log("Giriş Yapan Rol:", aktifKullanici?.rol);
@@ -128,6 +133,9 @@ function App() {
       icon: <FolderOpenOutlined />,
       label: "Şirket Arşivi / Drive",
     },
+    { key: "mesai", icon: <ClockCircleOutlined />, label: "Mesai Takip" },
+    // YENİ EKLENEN MODÜL
+    { key: "surecler", icon: <BookOutlined />, label: "Süreç Kütüphanesi" },
   ];
 
   const userMenu = {
@@ -276,12 +284,16 @@ function App() {
                 ? "İK / İzin Yönetimi"
                 : sayfa === "ekip"
                 ? "Ekip / Organizasyon"
+                : sayfa === "mesai"
+                ? "Mesai Takip"
+                : sayfa === "surecler"
+                ? "Süreç Kütüphanesi"
                 : "Görev Yönetimi"}
             </Title>
           </div>
 
           <Space>
-            {/* --- PROJE YÖNETİM BUTONU (HERKES GÖRSÜN DİYE KONTROLÜ KALDIRDIM) --- */}
+            {/* YENİ PROJE BUTONU (HERKES GÖRSÜN) */}
             <Button
               icon={<FolderAddOutlined />}
               onClick={() => {
@@ -291,7 +303,9 @@ function App() {
             >
               Projeler
             </Button>
-            {/* ------------------------------------------------------------------- */}
+
+            {/* MESAİ WIDGET */}
+            <MesaiWidget aktifKullanici={aktifKullanici} />
 
             <BildirimYonetimi
               aktifKullanici={aktifKullanici}
@@ -378,6 +392,8 @@ function App() {
             <IzinYonetimi aktifKullanici={aktifKullanici} />
           )}
           {sayfa === "ekip" && <EkipYonetimi aktifKullanici={aktifKullanici} />}
+          {sayfa === "mesai" && <MesaiTakip aktifKullanici={aktifKullanici} />}
+          {sayfa === "surecler" && <SurecYonetimi />}
         </Content>
       </Layout>
 
