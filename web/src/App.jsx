@@ -3,7 +3,7 @@ import AuthPage from "./AuthPage";
 import SatinAlma from "./SatinAlma";
 import IzinYonetimi from "./IzinYonetimi";
 import EkipYonetimi from "./EkipYonetimi";
-import AdminDashboard from "./AdminDashboard";
+import AdminDashboard from "./pages/AdminDashboard";
 import GorevYonetimi from "./GorevYonetimi";
 import DosyaYoneticisi from "./DosyaYoneticisi";
 import ProfilYonetimi from "./ProfilYonetimi";
@@ -61,22 +61,22 @@ const { Option } = Select;
 
 const API_URL = "http://localhost:3000";
 
+// Tüm isteklerde kullanılacak yardımcı header fonksiyonu
+const getAuthHeaders = () => {
+  const token = localStorage.getItem("wf_token");
+  if (!token) {
+    return {};
+  }
+  return {
+    Authorization: `Bearer ${token}`,
+  };
+};
+
 function App() {
   const [aktifKullanici, setAktifKullanici] = useState(
     JSON.parse(localStorage.getItem("wf_user")) || null
   );
   const [collapsed, setCollapsed] = useState(false);
-
-  const cikisYap = () => {
-    localStorage.removeItem("wf_user");
-    setAktifKullanici(null);
-    window.location.reload();
-  };
-
-  const kullaniciGuncelle = (yeniKullanici) => {
-    setAktifKullanici(yeniKullanici);
-    localStorage.setItem("wf_user", JSON.stringify(yeniKullanici));
-  };
 
   const [sayfa, setSayfa] = useState("dashboard");
   const [projeler, setProjeler] = useState([]);
@@ -94,6 +94,18 @@ function App() {
     "Yönetici",
   ];
   const yoneticiMi = YONETICILER.includes(aktifKullanici?.rol);
+
+  const cikisYap = () => {
+    localStorage.removeItem("wf_user");
+    localStorage.removeItem("wf_token");
+    setAktifKullanici(null);
+    window.location.reload();
+  };
+
+  const kullaniciGuncelle = (yeniKullanici) => {
+    setAktifKullanici(yeniKullanici);
+    localStorage.setItem("wf_user", JSON.stringify(yeniKullanici));
+  };
 
   const menuItems = [
     { key: "dashboard", icon: <DesktopOutlined />, label: "Ana Sayfa" },
@@ -157,17 +169,53 @@ function App() {
     }
   }, [aktifKullanici]);
 
-  const projeCek = () =>
-    fetch(`${API_URL}/gorevler/projeler`)
-      .then((res) => res.json())
-      .then((data) => setProjeler(Array.isArray(data) ? data : []));
+  const projeCek = async () => {
+    try {
+      const res = await fetch(`${API_URL}/gorevler/projeler`, {
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(),
+        },
+      });
 
-  const kullaniciCek = () =>
-    fetch(`${API_URL}/ik/kullanicilar`)
-      .then((res) => res.json())
-      .then((data) => setKullanicilar(data));
+      if (!res.ok) {
+        console.warn("Projeler alınamadı:", res.status);
+        setProjeler([]);
+        return;
+      }
 
-  const projeKaydet = (degerler) => {
+      const data = await res.json();
+      setProjeler(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Proje fetch hatası:", err);
+      setProjeler([]);
+    }
+  };
+
+  const kullaniciCek = async () => {
+    try {
+      const res = await fetch(`${API_URL}/ik/kullanicilar`, {
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(),
+        },
+      });
+
+      if (!res.ok) {
+        console.warn("Kullanıcılar alınamadı:", res.status);
+        setKullanicilar([]);
+        return;
+      }
+
+      const data = await res.json();
+      setKullanicilar(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Kullanıcı fetch hatası:", err);
+      setKullanicilar([]);
+    }
+  };
+
+  const projeKaydet = async (degerler) => {
     const payload = {
       ad: degerler.ad,
       departman: degerler.departman,
@@ -180,27 +228,52 @@ function App() {
         : null,
     };
 
-    fetch(`${API_URL}/gorevler/projeler`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    })
-      .then((res) => res.json())
-      .then(() => {
-        message.success("Proje oluşturuldu");
-        projeCek();
-        setAktifTab("1");
-      })
-      .catch(() => message.error("Proje kaydedilemedi"));
+    try {
+      const res = await fetch(`${API_URL}/gorevler/projeler`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        message.error("Proje kaydedilemedi");
+        return;
+      }
+
+      await res.json().catch(() => null); // body boş olabilir, sorun değil
+      message.success("Proje oluşturuldu");
+      await projeCek();
+      setAktifTab("1");
+    } catch (err) {
+      console.error("Proje kaydetme hatası:", err);
+      message.error("Proje kaydedilemedi");
+    }
   };
 
-  const projeSil = (id) => {
-    fetch(`${API_URL}/gorevler/projeler/${id}`, { method: "DELETE" }).then(
-      () => {
-        message.success("Proje silindi");
-        projeCek();
+  const projeSil = async (id) => {
+    try {
+      const res = await fetch(`${API_URL}/gorevler/projeler/${id}`, {
+        method: "DELETE",
+        headers: {
+          ...getAuthHeaders(),
+        },
+      });
+
+      if (!res.ok) {
+        message.error("Proje silinemedi");
+        return;
       }
-    );
+
+      // Çoğu API burada 204 döner, json beklemiyoruz
+      message.success("Proje silindi");
+      await projeCek();
+    } catch (err) {
+      console.error("Proje silme hatası:", err);
+      message.error("Proje silinemedi");
+    }
   };
 
   const handleBildirimNavigasyon = (gorevId) => {
@@ -286,7 +359,6 @@ function App() {
           </div>
 
           <Space>
-            {/* Header’da Projeler butonu kaldırıldı; Proje modalı görev sayfasından açılıyor */}
             <MesaiWidget aktifKullanici={aktifKullanici} />
 
             <BildirimYonetimi
@@ -393,7 +465,7 @@ function App() {
         onCancel={() => setProjeModalAcik(false)}
         footer={null}
         width={800}
-        destroyOnClose
+        destroyOnHidden
       >
         <Tabs
           activeKey={aktifTab}

@@ -49,10 +49,17 @@ export default function AuthPage({ onLoginSuccess }) {
       .then(async (res) => {
         setYukleniyor(false);
         if (res.ok) {
-          const user = await res.json();
+          const data = await res.json(); // Backend artık user + token dönüyor
+
           if (mod === "login") {
             message.success("Giriş Başarılı. Yönlendiriliyorsunuz...");
-            onLoginSuccess(user);
+
+            // --- YENİ EKLENEN KISIM: Token ve Kullanıcıyı Kaydet ---
+            localStorage.setItem("wf_user", JSON.stringify(data));
+            localStorage.setItem("wf_token", data.token);
+            // -------------------------------------------------------
+
+            onLoginSuccess(data);
           } else {
             message.success("Kayıt Başarılı! Yönetici onayı bekleniyor.");
             // Kayıttan sonra otomatik giriş yaptırmıyoruz, onayı bekletiyoruz.
@@ -61,8 +68,9 @@ export default function AuthPage({ onLoginSuccess }) {
             form.resetFields();
           }
         } else {
+          // Hata mesajını alırken backend'in json string döndürdüğünü varsayarak
           const msg = await res.text();
-          // Hata mesajını temizle (tırnak işaretlerini vs)
+          // Tırnak işaretlerini temizle
           message.error(msg.replace(/"/g, "") || "İşlem başarısız");
         }
       })

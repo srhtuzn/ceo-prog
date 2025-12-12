@@ -6,6 +6,7 @@ const path = require("path");
 const fs = require("fs");
 const pool = require("../config/db");
 const { upload } = require("../config/upload");
+const jwt = require("jsonwebtoken");
 
 // ==========================================
 // --- KAYIT OL ---
@@ -56,11 +57,11 @@ router.post("/register", async (req, res) => {
 
 // ==========================================
 // --- GİRİŞ YAP ---
-// URL: POST /auth/login
-// ==========================================
 router.post("/login", async (req, res) => {
   try {
     const { email, sifre } = req.body;
+
+    // 1. Kullanıcıyı bul
     const user = await pool.query(
       "SELECT * FROM kullanicilar WHERE email = $1",
       [email]
@@ -69,16 +70,38 @@ router.post("/login", async (req, res) => {
       return res.status(401).json("Email veya şifre hatalı");
 
     const u = user.rows[0];
-    if (u.hesap_durumu === "Bekliyor")
-      return res.status(403).json("Hesabınız henüz onaylanmadı.");
-    if (u.hesap_durumu === "Reddedildi")
-      return res.status(403).json("Hesabınız reddedilmiştir.");
 
+    // 2. Durum Kontrolü
+    if (u.hesap_durumu === "Bekliyor")
+      return res.status(403).json("Hesabınız onay bekliyor.");
+    if (u.hesap_durumu === "Reddedildi")
+      return res.status(403).json("Hesabınız reddedildi.");
+
+    // 3. Şifre Kontrolü
     const validPassword = await bcrypt.compare(sifre, u.sifre);
     if (!validPassword) return res.status(401).json("Email veya şifre hatalı");
 
-    delete u.sifre;
-    res.json(u);
+    // 4. TOKEN OLUŞTUR (YENİ KISIM) 🔑
+    const payload = {
+      user: {
+        id: u.id,
+        ad_soyad: u.ad_soyad,
+        rol: u.rol,
+        departman: u.departman,
+      },
+    };
+
+    jwt.sign(
+      payload,
+      process.env.JWT_SECRET || "gizliAnahtar",
+      { expiresIn: "24h" }, // 24 saat geçerli
+      (err, token) => {
+        if (err) throw err;
+        // Şifreyi listeden çıkar ve token ile birlikte gönder
+        delete u.sifre;
+        res.json({ ...u, token });
+      }
+    );
   } catch (err) {
     console.error("LOGIN HATASI:", err.message);
     res.status(500).send("Sunucu hatası");

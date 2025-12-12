@@ -20,6 +20,8 @@ import {
   FilePdfOutlined,
   SearchOutlined,
   FilterOutlined,
+  ReloadOutlined,
+  GlobalOutlined,
 } from "@ant-design/icons";
 
 const API_URL = "http://localhost:3000";
@@ -31,6 +33,10 @@ export default function SatinAlma({ aktifKullanici }) {
   const [projeler, setProjeler] = useState([]);
   const [modalAcik, setModalAcik] = useState(false);
   const [yukleniyor, setYukleniyor] = useState(false);
+
+  // --- GÜNCELLEME: Kur Bilgisi Obje Oldu (USD ve EUR) ---
+  const [kurBilgisi, setKurBilgisi] = useState({ usd: null, eur: null });
+  const [kurYukleniyor, setKurYukleniyor] = useState(false);
 
   const [aramaMetni, setAramaMetni] = useState("");
   const [filtreDepartman, setFiltreDepartman] = useState(null);
@@ -46,27 +52,87 @@ export default function SatinAlma({ aktifKullanici }) {
     projeCek();
   }, []);
 
+  const handle401 = () => {
+    // Ortak 401 handling
+    localStorage.removeItem("wf_user");
+    // Token da varsa temizleyelim
+    localStorage.removeItem("wf_token");
+    window.location.reload();
+  };
+
   const veriCek = () => {
     setYukleniyor(true);
-    fetch(`${API_URL}/finans?userId=${aktifKullanici.id}`)
-      .then((res) => res.json())
+    fetch(`${API_URL}/finans`, {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem("wf_token")}`,
+      },
+    })
+      .then((res) => {
+        if (res.status === 401) {
+          handle401();
+          return [];
+        }
+        return res.json();
+      })
       .then((data) => {
         setTalepler(Array.isArray(data) ? data : []);
         setYukleniyor(false);
       })
-      .catch(() => {
-        setTalepler([]);
+      .catch((err) => {
+        console.error("Finans talepleri alınamadı:", err);
         setYukleniyor(false);
       });
   };
 
+  // BURASI GÜNCELLENDİ: Projeler çağrısına da token ekliyoruz
   const projeCek = () => {
-    fetch(`${API_URL}/gorevler/projeler`)
-      .then((res) => res.json())
+    fetch(`${API_URL}/gorevler/projeler`, {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem("wf_token")}`,
+      },
+    })
+      .then((res) => {
+        if (res.status === 401) {
+          handle401();
+          return [];
+        }
+        return res.json();
+      })
       .then((data) => {
         if (Array.isArray(data)) setProjeler(data);
+      })
+      .catch((err) => {
+        console.error("Projeler alınamadı:", err);
       });
   };
+
+  // --- GÜNCELLEME: Hem Dolar Hem Euro Çekme ---
+  const kurGetir = async () => {
+    setKurYukleniyor(true);
+    try {
+      // İki isteği aynı anda (paralel) atıyoruz, beklememek için
+      const [resUSD, resEUR] = await Promise.all([
+        fetch("https://api.exchangerate-api.com/v4/latest/USD"),
+        fetch("https://api.exchangerate-api.com/v4/latest/EUR"),
+      ]);
+
+      const dataUSD = await resUSD.json();
+      const dataEUR = await resEUR.json();
+
+      setKurBilgisi({
+        usd: dataUSD.rates.TRY,
+        eur: dataEUR.rates.TRY,
+      });
+
+      message.success("Güncel kurlar çekildi");
+    } catch (error) {
+      console.error("Kur bilgisi hatası:", error);
+      message.error("Kur bilgisi alınamadı");
+    } finally {
+      setKurYukleniyor(false);
+    }
+  };
+  // ------------------------------------------------
 
   const filtrelenmisTalepler = talepler.filter((talep) => {
     const metinUyumu =
@@ -82,7 +148,6 @@ export default function SatinAlma({ aktifKullanici }) {
 
   const formGonder = (degerler) => {
     const formData = new FormData();
-    formData.append("talep_eden_id", aktifKullanici.id);
     formData.append("baslik", degerler.baslik);
     formData.append("aciklama", degerler.aciklama || "");
     formData.append("tutar", degerler.tutar);
@@ -93,27 +158,52 @@ export default function SatinAlma({ aktifKullanici }) {
       formData.append("dosya", degerler.dosya[0].originFileObj);
     }
 
-    fetch(`${API_URL}/finans`, { method: "POST", body: formData })
-      .then((res) => res.json())
+    fetch(`${API_URL}/finans`, {
+      method: "POST",
+      body: formData,
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem("wf_token")}`,
+      },
+    })
+      .then((res) => {
+        if (res.status === 401) {
+          throw new Error("Oturum süresi doldu.");
+        }
+        return res.json();
+      })
       .then(() => {
         message.success("Talep oluşturuldu");
         setModalAcik(false);
         form.resetFields();
         veriCek();
       })
-      .catch(() => message.error("Hata oluştu"));
+      .catch((err) => message.error(err.message || "Hata oluştu"));
   };
 
   const onaylaReddet = (id, islem) => {
-    const rol = aktifKullanici?.rol || "";
     fetch(`${API_URL}/finans/onay/${id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ onaylayan_rol: rol, islem: islem }),
-    }).then(() => {
-      message.success(`İşlem yapıldı: ${islem}`);
-      veriCek();
-    });
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("wf_token")}`,
+      },
+      body: JSON.stringify({ islem: islem }),
+    })
+      .then((res) => {
+        if (res.status === 401) {
+          handle401();
+          return;
+        }
+        return res.json().catch(() => null);
+      })
+      .then(() => {
+        message.success(`İşlem yapıldı: ${islem}`);
+        veriCek();
+      })
+      .catch((err) => {
+        console.error("Onay/Reddet hatası:", err);
+        message.error("İşlem tamamlanamadı");
+      });
   };
 
   const columns = [
@@ -145,6 +235,7 @@ export default function SatinAlma({ aktifKullanici }) {
             <a
               href={`${API_URL}/uploads/${r.dosya_yolu}`}
               target="_blank"
+              rel="noreferrer"
               style={{ marginLeft: 10, color: "red" }}
             >
               <FilePdfOutlined /> Dosya
@@ -157,7 +248,10 @@ export default function SatinAlma({ aktifKullanici }) {
       title: "Tutar",
       render: (_, r) => (
         <Tag color="green">
-          {r.tutar} {r.para_birimi}
+          {parseFloat(r.tutar).toLocaleString("tr-TR", {
+            minimumFractionDigits: 2,
+          })}{" "}
+          {r.para_birimi}
         </Tag>
       ),
     },
@@ -180,7 +274,6 @@ export default function SatinAlma({ aktifKullanici }) {
 
         return (
           <Space>
-            {/* Finans Onayı Beklerken: Finansçı veya GM işlem yapabilir */}
             {r.durum === "Finans Onayı Bekliyor" && (isFinans || isGM) && (
               <>
                 <Button
@@ -199,8 +292,6 @@ export default function SatinAlma({ aktifKullanici }) {
                 </Button>
               </>
             )}
-
-            {/* GM Onayı Beklerken: Sadece GM işlem yapabilir */}
             {r.durum === "Genel Müdür Onayı Bekliyor" && isGM && (
               <>
                 <Button
@@ -306,6 +397,47 @@ export default function SatinAlma({ aktifKullanici }) {
         footer={null}
       >
         <Form form={form} layout="vertical" onFinish={formGonder}>
+          {/* API ENTEGRASYON ALANI (GÜNCELLENDİ: USD + EUR) */}
+          <div
+            style={{
+              marginBottom: 15,
+              padding: 10,
+              background: "#f6ffed",
+              border: "1px solid #b7eb8f",
+              borderRadius: 6,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <Space>
+              <GlobalOutlined style={{ color: "#52c41a" }} />
+              <Text strong style={{ fontSize: 12 }}>
+                Dış Servis Entegrasyonu
+              </Text>
+            </Space>
+            <Space>
+              {kurBilgisi.usd && (
+                <Text type="success" strong style={{ marginRight: 10 }}>
+                  🇺🇸 1 USD = {kurBilgisi.usd} ₺
+                </Text>
+              )}
+              {kurBilgisi.eur && (
+                <Text type="success" strong>
+                  🇪🇺 1 EUR = {kurBilgisi.eur} ₺
+                </Text>
+              )}
+              <Button
+                size="small"
+                icon={<ReloadOutlined />}
+                loading={kurYukleniyor}
+                onClick={kurGetir}
+              >
+                Kurları Getir
+              </Button>
+            </Space>
+          </div>
+
           <div style={{ display: "flex", gap: 10 }}>
             <Form.Item
               name="departman"

@@ -24,7 +24,6 @@ router.get("/ozet", async (req, res) => {
     `);
 
     // 3. PROJE BAZLI İLERLEME (Bar Grafiği ve Liste İçin)
-    // Her projenin toplam görev sayısını ve biten görev sayısını çeker
     const projeIlerleme = await pool.query(`
       SELECT p.ad, 
              COUNT(g.id) as toplam_is,
@@ -34,56 +33,41 @@ router.get("/ozet", async (req, res) => {
       GROUP BY p.id, p.ad
     `);
 
-    // 4. FİNANSAL ÖZET (Onay Bekleyen Toplam Tutar)
-    // Farklı para birimleri olabileceği için TL bazında örnek toplama yapıyoruz veya ayrı ayrı.
-    // Basitlik adına "Onay Bekleyen" kayıt sayısını ve toplam tutarı çekelim.
+    // 4. FİNANSAL ÖZET - ARRAY OLARAK DÖNÜYOR
     const finansOzet = await pool.query(`
-  SELECT 
-    CASE 
-      WHEN para_birimi IN ('TL', 'TRY', '₺') THEN 'TL'
-      WHEN para_birimi IN ('USD', '$') THEN 'USD'
-      WHEN para_birimi IN ('EUR', '€', 'EURO') THEN 'EUR'
-      WHEN para_birimi IN ('GBP', '£') THEN 'GBP'
-      ELSE para_birimi 
-    END as para_birimi_grup,
-    COUNT(*) as bekleyen_adet,
-    SUM(tutar) as toplam_tutar
-  FROM satin_alma 
-  WHERE durum LIKE '%Bekliyor%'
-  GROUP BY 
-    CASE 
-      WHEN para_birimi IN ('TL', 'TRY', '₺') THEN 'TL'
-      WHEN para_birimi IN ('USD', '$') THEN 'USD'
-      WHEN para_birimi IN ('EUR', '€', 'EURO') THEN 'EUR'
-      WHEN para_birimi IN ('GBP', '£') THEN 'GBP'
-      ELSE para_birimi 
-    END
-  ORDER BY para_birimi_grup
-`);
-    // Farklı para birimleri için varsayılan değerler oluşturalım
-    const tumParaBirimleri = ["TL", "USD", "EUR", "GBP"];
-    const finansMap = {};
+      SELECT 
+        CASE 
+          WHEN para_birimi IN ('TL', 'TRY', '₺') THEN 'TL'
+          WHEN para_birimi IN ('USD', '$') THEN 'USD'
+          WHEN para_birimi IN ('EUR', '€', 'EURO') THEN 'EUR'
+          WHEN para_birimi IN ('GBP', '£') THEN 'GBP'
+          ELSE para_birimi 
+        END as paraBirimi,
+        COUNT(*) as bekleyenAdet,
+        SUM(tutar) as toplamTutar
+      FROM satin_alma 
+      WHERE durum LIKE '%Bekliyor%'
+      GROUP BY 
+        CASE 
+          WHEN para_birimi IN ('TL', 'TRY', '₺') THEN 'TL'
+          WHEN para_birimi IN ('USD', '$') THEN 'USD'
+          WHEN para_birimi IN ('EUR', '€', 'EURO') THEN 'EUR'
+          WHEN para_birimi IN ('GBP', '£') THEN 'GBP'
+          ELSE para_birimi 
+        END
+      ORDER BY paraBirimi
+    `);
 
-    // Mevcut verileri map'e ekle
-    finansOzet.rows.forEach((row) => {
-      finansMap[row.para_birimi_grup] = {
-        paraBirimi: row.para_birimi_grup,
-        bekleyenAdet: parseInt(row.bekleyen_adet) || 0,
-        toplamTutar: parseFloat(row.toplam_tutar) || 0,
-      };
-    });
-
-    // Eksik para birimleri için 0 değerli objeler ekle
-    const finansArray = tumParaBirimleri.map((pb) => {
-      if (finansMap[pb]) {
-        return finansMap[pb];
-      }
-      return {
-        paraBirimi: pb,
-        bekleyenAdet: 0,
-        toplamTutar: 0,
-      };
-    });
+    // Eğer hiç veri yoksa varsayılan array oluştur
+    let finansArray = finansOzet.rows;
+    if (finansArray.length === 0) {
+      finansArray = [
+        { paraBirimi: "TL", bekleyenAdet: 0, toplamTutar: 0 },
+        { paraBirimi: "USD", bekleyenAdet: 0, toplamTutar: 0 },
+        { paraBirimi: "EUR", bekleyenAdet: 0, toplamTutar: 0 },
+        { paraBirimi: "GBP", bekleyenAdet: 0, toplamTutar: 0 },
+      ];
+    }
 
     // 5. BUGÜN İZİNLİ OLANLAR
     const bugun = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
@@ -120,18 +104,10 @@ router.get("/ozet", async (req, res) => {
       toplamTalep: parseInt(satinAlma.rows[0].count),
 
       gorevDurumlari: gorevDurumlari.rows,
-      projeIlerleme: projeIlerleme.rows, // <-- YENİ EKLENDİ
+      projeIlerleme: projeIlerleme.rows,
 
-      finans: {
-        bekleyenAdet: finansOzet.rows.reduce(
-          (acc, row) => acc + parseInt(row.bekleyen_adet),
-          0
-        ),
-        toplamTutar:
-          finansOzet.rows.length > 0 ? finansOzet.rows[0].toplam_tutar : 0, // Basitlik için ilk kuru aldık
-        paraBirimi:
-          finansOzet.rows.length > 0 ? finansOzet.rows[0].para_birimi : "TL",
-      },
+      // DÜZELTME: Array olarak gönderiyoruz
+      finans: finansArray,
 
       bugunIzinli: parseInt(izinliler.rows[0].count),
       riskliIsler: riskliIsler.rows,
@@ -144,10 +120,6 @@ router.get("/ozet", async (req, res) => {
     res.status(500).send("Dashboard verileri alınamadı");
   }
 });
-
-// ... (Diğer bildirim rotaları AYNEN KALSIN, onlar doğruydu) ...
-// BİLDİRİM KISIMLARINI SİLMEYİN, SADECE /ozet endpointini değiştirin.
-// (Kod tekrarı olmasın diye sadece değişen kısmı yazdım, dosyanın altını koruyun)
 
 // ==========================================
 // 2. BİLDİRİMLER (MEVCUT KODU KORU)

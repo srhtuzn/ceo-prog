@@ -1,23 +1,23 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../config/db");
+const auth = require("../middleware/authMiddleware"); // <--- GÜVENLİK EKLENDİ
 
 // ==========================================
-// 1. GÜNLÜK DURUMU GETİR (DÜZELTİLDİ: Tarih fark etmeksizin açık kayıt var mı?)
-// URL: GET /mesai/durum?userId=...
+// 1. KULLANICININ ANLIK DURUMU (GÜVENLİ 🔒)
+// URL: GET /mesai/durum
 // ==========================================
-router.get("/durum", async (req, res) => {
+router.get("/durum", auth, async (req, res) => {
   try {
-    const { userId } = req.query;
+    // ID'yi Token'dan alıyoruz
+    const userId = req.user.id;
 
-    // DÜZELTME: 'AND tarih = CURRENT_DATE' kaldırıldı.
-    // Böylece dünden kalan "kapanmamış" mesaileri de görür ve "Çıkış Yap" butonunu gösterir.
+    // Tarih fark etmeksizin, kapanmamış (bitis IS NULL) son kaydı getir.
     const kayit = await pool.query(
       "SELECT * FROM mesai_kayitlari WHERE kullanici_id = $1 AND bitis IS NULL ORDER BY id DESC LIMIT 1",
       [userId]
     );
 
-    // Eğer çıkış yapmamışsa 'iceride: true' döner
     if (kayit.rows.length > 0) {
       res.json({ iceride: true, kayit: kayit.rows[0] });
     } else {
@@ -30,12 +30,12 @@ router.get("/durum", async (req, res) => {
 });
 
 // ==========================================
-// 2. GİRİŞ YAP (CHECK-IN)
-// URL: POST /mesai/giris
+// 2. GİRİŞ YAP (CHECK-IN) (GÜVENLİ 🔒)
 // ==========================================
-router.post("/giris", async (req, res) => {
+router.post("/giris", auth, async (req, res) => {
   try {
-    const { userId, aciklama } = req.body;
+    const userId = req.user.id; // Token'dan al (Body'den DEĞİL)
+    const { aciklama } = req.body;
 
     // Önce kontrol et: Zaten içeride mi?
     const kontrol = await pool.query(
@@ -48,14 +48,7 @@ router.post("/giris", async (req, res) => {
         .json({ error: "Zaten giriş yapılmış! Önce çıkış yapmalısınız." });
     }
 
-    // Geç Kalma Kontrolü (09:15)
-    const simdi = new Date();
-    const limit = new Date();
-    limit.setHours(9, 15, 0);
-
     let durum = "Çalışıyor";
-    // İsterseniz burayı aktif edebilirsiniz:
-    // if (simdi > limit) durum = "Geç Başladı";
 
     const result = await pool.query(
       "INSERT INTO mesai_kayitlari (kullanici_id, baslangic, durum, aciklama) VALUES ($1, NOW(), $2, $3) RETURNING *",
@@ -70,12 +63,11 @@ router.post("/giris", async (req, res) => {
 });
 
 // ==========================================
-// 3. ÇIKIŞ YAP (CHECK-OUT)
-// URL: POST /mesai/cikis
+// 3. ÇIKIŞ YAP (CHECK-OUT) (GÜVENLİ 🔒)
 // ==========================================
-router.put("/cikis", async (req, res) => {
+router.put("/cikis", auth, async (req, res) => {
   try {
-    const { userId } = req.body;
+    const userId = req.user.id; // Token'dan al
 
     // Aktif kaydı bul
     const aktifKayit = await pool.query(
@@ -94,7 +86,7 @@ router.put("/cikis", async (req, res) => {
     const farkMs = bitis - baslangic;
     const sureDakika = Math.floor(farkMs / 1000 / 60);
 
-    // Mesai Türü Belirle (9 saat = 540 dk üzeri mesai sayılır)
+    // Mesai Türü Belirle (Örn: 9 saat = 540 dk üzeri fazla mesai)
     let mesaiTuru = "Normal";
     if (sureDakika > 540) mesaiTuru = "Fazla Mesai";
 
@@ -111,22 +103,29 @@ router.put("/cikis", async (req, res) => {
 });
 
 // ==========================================
-// 4. MESAİ GEÇMİŞİ (LİSTELEME)
-// URL: GET /mesai/gecmis?userId=...
+// 4. GEÇMİŞ KAYITLAR (GÜVENLİ 🔒)
 // ==========================================
-router.get("/gecmis", async (req, res) => {
+router.get("/gecmis", auth, async (req, res) => {
   try {
-    const { userId, tumu } = req.query; // tumu=true ise yönetici herkesi görür
+    const userId = req.user.id;
+    const userRol = req.user.rol;
+    const { tumu } = req.query;
 
     let query = `
-            SELECT m.*, k.ad_soyad, k.avatar 
-            FROM mesai_kayitlari m
-            JOIN kullanicilar k ON m.kullanici_id = k.id
-        `;
+              SELECT m.*, k.ad_soyad, k.avatar 
+              FROM mesai_kayitlari m
+              JOIN kullanicilar k ON m.kullanici_id = k.id
+          `;
     const params = [];
 
-    // Eğer sadece kendi geçmişini istiyorsa
-    if (!tumu || tumu === "false") {
+    // Yönetici kontrolü
+    const isManager = ["Genel Müdür", "İnsan Kaynakları", "Yönetim"].some((r) =>
+      userRol.includes(r)
+    );
+
+    if (isManager && tumu === "true") {
+      // Filtre yok, hepsini getir
+    } else {
       query += " WHERE m.kullanici_id = $1";
       params.push(userId);
     }
@@ -140,82 +139,73 @@ router.get("/gecmis", async (req, res) => {
     res.status(500).send("Geçmiş alınamadı");
   }
 });
-// mesai.js - yeni endpoint ekleyin
-router.get("/bugunku", async (req, res) => {
+
+// ==========================================
+// 5. BUGÜNKÜ KAYITLAR (YÖNETİCİ PANELİ İÇİN)
+// ==========================================
+router.get("/bugunku", auth, async (req, res) => {
   try {
-    const { tumu } = req.query;
-
-    let query = `
-      SELECT m.*, k.ad_soyad, k.avatar 
-      FROM mesai_kayitlari m
-      JOIN kullanicilar k ON m.kullanici_id = k.id
-      WHERE DATE(m.baslangic) = CURRENT_DATE
-    `;
-
-    const params = [];
-
-    // Eğer sadece kendi kayıtlarını istiyorsa
-    if (!tumu || tumu === "false") {
-      const { userId } = req.query;
-      if (userId) {
-        query += ` AND m.kullanici_id = $1`;
-        params.push(userId);
-      }
-    }
-
-    query += " ORDER BY m.baslangic DESC";
-
-    const result = await pool.query(query, params);
+    const query = `
+        SELECT m.*, k.ad_soyad, k.avatar 
+        FROM mesai_kayitlari m
+        JOIN kullanicilar k ON m.kullanici_id = k.id
+        WHERE DATE(m.baslangic) = CURRENT_DATE 
+          OR DATE(m.bitis) = CURRENT_DATE 
+        ORDER BY m.baslangic DESC
+      `;
+    const result = await pool.query(query);
     res.json(result.rows);
   } catch (err) {
     console.error(err);
     res.status(500).send("Bugünkü kayıtlar alınamadı");
   }
 });
-// mesai.js dosyasına bu endpointi ekleyin
-router.get("/bugunku-aktif", async (req, res) => {
+
+// ==========================================
+// 6. ŞU AN İÇERİDE OLANLAR (DÜZELTİLEN KISIM 🌙)
+// ==========================================
+router.get("/bugunku-aktif", auth, async (req, res) => {
   try {
+    // Sadece "bitis IS NULL" kontrolü yapıyoruz.
     const query = `
-      SELECT m.*, k.ad_soyad, k.avatar, k.departman 
-      FROM mesai_kayitlari m
-      JOIN kullanicilar k ON m.kullanici_id = k.id
-      WHERE DATE(m.baslangic) = CURRENT_DATE 
-      AND m.bitis IS NULL
-      ORDER BY m.baslangic DESC
-    `;
+        SELECT m.*, k.ad_soyad, k.avatar, k.departman 
+        FROM mesai_kayitlari m
+        JOIN kullanicilar k ON m.kullanici_id = k.id
+        WHERE m.bitis IS NULL
+        ORDER BY m.baslangic DESC
+      `;
 
     const result = await pool.query(query);
     res.json(result.rows);
   } catch (err) {
     console.error(err);
-    res.status(500).send("Bugünkü aktif kayıtlar alınamadı");
+    res.status(500).send("Aktif kayıtlar alınamadı");
   }
 });
 
 // ==========================================
-// 5. AYLIK PUANTAJ RAPORU (EXCEL İÇİN) 📊
-// URL: GET /mesai/rapor?ay=2025-01
+// 7. RAPORLAMA
 // ==========================================
-router.get("/rapor", async (req, res) => {
+router.get("/rapor", auth, async (req, res) => {
   try {
-    const { ay } = req.query; // Format: 'YYYY-MM'
+    const { ay } = req.query; // 'YYYY-MM'
     if (!ay) return res.status(400).send("Ay bilgisi gerekli");
 
     const raporQuery = `
-            SELECT 
-                k.ad_soyad as "Personel",
-                k.departman as "Departman",
-                m.tarih as "Tarih",
-                TO_CHAR(m.baslangic, 'HH24:MI') as "Giris",
-                TO_CHAR(m.bitis, 'HH24:MI') as "Cikis",
-                m.sure_dakika as "Sure_DK",
-                ROUND(m.sure_dakika / 60.0, 2) as "Sure_Saat",
-                m.mesai_turu as "Durum"
-            FROM mesai_kayitlari m
-            JOIN kullanicilar k ON m.kullanici_id = k.id
-            WHERE TO_CHAR(m.tarih, 'YYYY-MM') = $1
-            ORDER BY m.tarih DESC, k.ad_soyad ASC
-        `;
+              SELECT 
+                  k.ad_soyad as "Personel",
+                  k.departman as "Departman",
+                  m.tarih as "Tarih",
+                  TO_CHAR(m.baslangic, 'HH24:MI') as "Giris",
+                  TO_CHAR(m.bitis, 'HH24:MI') as "Cikis",
+                  m.sure_dakika as "Sure_DK",
+                  ROUND(m.sure_dakika / 60.0, 2) as "Sure_Saat",
+                  m.mesai_turu as "Durum"
+              FROM mesai_kayitlari m
+              JOIN kullanicilar k ON m.kullanici_id = k.id
+              WHERE TO_CHAR(m.tarih, 'YYYY-MM') = $1
+              ORDER BY m.tarih DESC, k.ad_soyad ASC
+          `;
 
     const result = await pool.query(raporQuery, [ay]);
     res.json(result.rows);

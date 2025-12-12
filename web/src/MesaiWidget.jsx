@@ -32,26 +32,58 @@ export default function MesaiWidget({ aktifKullanici }) {
 
   const timerRef = useRef(null);
 
-  // DURUM KONTROL + GLOBAL EVENT DİNLE
+  // --- YARDIMCI: GÜVENLİ FETCH ---
+  const authFetch = async (url, options = {}) => {
+    const token = localStorage.getItem("wf_token");
+    if (!token) return null; // Token yoksa sessizce çık veya login'e at
+
+    const res = await fetch(url, {
+      ...options,
+      headers: {
+        ...options.headers,
+        Authorization: `Bearer ${token}`, // Anahtar
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (res.status === 401) {
+      // Token geçersizse oturumu kapat
+      localStorage.removeItem("wf_user");
+      localStorage.removeItem("wf_token");
+      window.location.reload();
+      throw new Error("Yetkisiz Erişim");
+    }
+
+    return res;
+  };
+
+  // --- 1. DURUM KONTROL & EVENT DİNLEME ---
   useEffect(() => {
     if (!aktifKullanici) return;
 
-    const handleMesaiDegisti = (e) => {
-      if (e.detail?.userId && e.detail.userId !== aktifKullanici.id) return;
+    // Widget açıldığında veya global event geldiğinde çalışır
+    const durumGuncelle = () => {
       durumKontrol();
     };
 
-    durumKontrol();
+    durumGuncelle();
+
+    // Diğer sayfalardan (MesaiTakip.jsx) gelen değişiklikleri dinle
+    const handleMesaiDegisti = (e) => {
+      if (e.detail?.userId && e.detail.userId === aktifKullanici.id) {
+        durumGuncelle();
+      }
+    };
 
     window.addEventListener("mesaiDegisti", handleMesaiDegisti);
 
     return () => {
       window.removeEventListener("mesaiDegisti", handleMesaiDegisti);
-      clearInterval(timerRef.current);
+      if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [aktifKullanici]);
+  }, [aktifKullanici?.id]);
 
-  // Sayaç Mantığı
+  // --- 2. SAYAÇ MANTIĞI ---
   useEffect(() => {
     if (iceride && baslangicZamani) {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -72,13 +104,16 @@ export default function MesaiWidget({ aktifKullanici }) {
       clearInterval(timerRef.current);
       setGecenSure("00:00:00");
     }
+    return () => clearInterval(timerRef.current);
   }, [iceride, baslangicZamani]);
 
+  // --- 3. API İŞLEMLERİ ---
   const durumKontrol = async () => {
     try {
-      const res = await fetch(
-        `${API_URL}/mesai/durum?userId=${aktifKullanici.id}`
-      );
+      // URL'den userId parametresi SİLİNDİ (Token'dan alıyor)
+      const res = await authFetch(`${API_URL}/mesai/durum`);
+      if (!res) return;
+
       const data = await res.json();
       if (data.iceride) {
         setIceride(true);
@@ -88,7 +123,7 @@ export default function MesaiWidget({ aktifKullanici }) {
         setBaslangicZamani(null);
       }
     } catch (error) {
-      console.error("Mesai durumu alınamadı", error);
+      console.error("Widget durum hatası:", error);
     }
   };
 
@@ -98,16 +133,15 @@ export default function MesaiWidget({ aktifKullanici }) {
     const method = tip === "giris" ? "POST" : "PUT";
 
     try {
-      const res = await fetch(`${API_URL}${endpoint}`, {
+      // Body'den userId SİLİNDİ
+      const res = await authFetch(`${API_URL}${endpoint}`, {
         method,
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: aktifKullanici.id,
           aciklama: "Hızlı Widget İşlemi",
         }),
       });
 
-      if (res.ok) {
+      if (res && res.ok) {
         const data = await res.json();
         if (tip === "giris") {
           message.success("Mesai Başlatıldı! Kolay gelsin.");
@@ -117,10 +151,10 @@ export default function MesaiWidget({ aktifKullanici }) {
           message.success("Mesai Bitirildi. İyi dinlenmeler!");
           setIceride(false);
           setBaslangicZamani(null);
-          setAcik(false);
+          setAcik(false); // İşlem bitince popover'ı kapat
         }
 
-        // Global event: sayfa vs diğer bileşenler güncellensin
+        // Global event fırlat (MesaiTakip sayfasını güncellemek için)
         window.dispatchEvent(
           new CustomEvent("mesaiDegisti", {
             detail: { userId: aktifKullanici.id },
@@ -142,12 +176,12 @@ export default function MesaiWidget({ aktifKullanici }) {
         <Text type="secondary" style={{ fontSize: 12 }}>
           BUGÜNKÜ DURUM
         </Text>
-        <div>
+        <div style={{ marginTop: 5 }}>
           {iceride ? (
             <Tag
               color="processing"
               icon={<SyncOutlined spin />}
-              style={{ padding: "5px 10px", marginTop: 5, fontSize: 14 }}
+              style={{ padding: "5px 15px", fontSize: 14 }}
             >
               ÇALIŞIYOR
             </Tag>
@@ -155,7 +189,7 @@ export default function MesaiWidget({ aktifKullanici }) {
             <Tag
               color="default"
               icon={<CoffeeOutlined />}
-              style={{ padding: "5px 10px", marginTop: 5, fontSize: 14 }}
+              style={{ padding: "5px 15px", fontSize: 14 }}
             >
               MESAİDE DEĞİL
             </Tag>
@@ -178,6 +212,7 @@ export default function MesaiWidget({ aktifKullanici }) {
             color: iceride ? "#3f8600" : "#999",
             fontWeight: "bold",
             fontFamily: "monospace",
+            fontSize: "24px",
           }}
         />
       </div>
@@ -193,8 +228,9 @@ export default function MesaiWidget({ aktifKullanici }) {
           style={{
             backgroundColor: "#52c41a",
             borderColor: "#52c41a",
-            height: 50,
+            height: 45,
             fontSize: 16,
+            fontWeight: "bold",
           }}
         >
           MESAİYE BAŞLA
@@ -208,13 +244,17 @@ export default function MesaiWidget({ aktifKullanici }) {
           icon={<PauseCircleOutlined />}
           loading={loading}
           onClick={() => islemYap("cikis")}
-          style={{ height: 50, fontSize: 16 }}
+          style={{
+            height: 45,
+            fontSize: 16,
+            fontWeight: "bold",
+          }}
         >
           MESAİYİ BİTİR
         </Button>
       )}
 
-      {iceride && (
+      {iceride && baslangicZamani && (
         <div style={{ marginTop: 10, fontSize: 11, color: "#888" }}>
           Giriş: {dayjs(baslangicZamani).format("HH:mm")}
         </div>
@@ -230,6 +270,7 @@ export default function MesaiWidget({ aktifKullanici }) {
       open={acik}
       onOpenChange={setAcik}
       placement="bottomRight"
+      arrow={false}
     >
       <div
         style={{
@@ -237,20 +278,25 @@ export default function MesaiWidget({ aktifKullanici }) {
           display: "flex",
           alignItems: "center",
           height: "100%",
-          padding: "0 10px",
+          padding: "0 15px",
+          borderLeft: "1px solid #f0f0f0", // Ayırıcı çizgi eklendi
         }}
       >
-        <Badge dot={iceride} color="green" offset={[-2, 2]}>
+        <Badge dot={iceride} color="green" offset={[-5, 5]}>
           <Button
             shape="circle"
+            size="large"
             icon={
               <ClockCircleOutlined
-                style={{ color: iceride ? "#52c41a" : undefined }}
+                style={{
+                  color: iceride ? "#52c41a" : undefined,
+                  fontSize: "18px",
+                }}
               />
             }
             style={{
-              border: iceride ? "1px solid #b7eb8f" : undefined,
-              backgroundColor: iceride ? "#f6ffed" : undefined,
+              border: iceride ? "1px solid #b7eb8f" : "1px solid #d9d9d9",
+              backgroundColor: iceride ? "#f6ffed" : "white",
             }}
           />
         </Badge>
